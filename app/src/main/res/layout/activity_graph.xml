@@ -1,0 +1,111 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="16dp"
+    android:background="#000000">
+
+    <!-- Title -->
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Acceleration Graph (Debug)"
+        android:textSize="24sp"
+        android:textColor="#FFFFFF"
+        android:gravity="center"
+        android:layout_marginBottom="16dp"/>
+
+    <!-- Graph View -->
+    <com.example.wytv2.pdr.graph.GraphView
+        android:id="@+id/graph_view"
+        android:layout_width="match_parent"
+        android:layout_height="400dp"
+        android:layout_marginBottom="16dp"/>
+
+    <!-- Threshold Control -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:layout_marginBottom="16dp">
+
+        <TextView
+            android:id="@+id/threshold_value_text"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Threshold: 1.20 m/s²"
+            android:textSize="18sp"
+            android:textColor="#FFFFFF"
+            android:layout_marginBottom="8dp"/>
+
+        <SeekBar
+            android:id="@+id/threshold_seekbar"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:max="500"
+            android:progress="240"/>
+    </LinearLayout>
+
+    <!-- Checkbox Controls -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:layout_marginBottom="16dp">
+
+        <CheckBox
+            android:id="@+id/show_threshold_checkbox"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Show Threshold"
+            android:textColor="#FFFFFF"
+            android:checked="true"/>
+
+        <CheckBox
+            android:id="@+id/show_points_checkbox"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Show Points"
+            android:textColor="#FFFFFF"/>
+    </LinearLayout>
+
+    <!-- Button Controls -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal">
+
+        <Button
+            android:id="@+id/clear_button"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Clear Graph"
+            android:layout_marginEnd="8dp"
+            android:background="#FF9800"
+            android:textColor="#000000"/>
+
+        <Button
+            android:id="@+id/back_button"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Back"
+            android:layout_marginStart="8dp"
+            android:background="#F44336"
+            android:textColor="#000000"/>
+    </LinearLayout>
+
+    <!-- Instructions -->
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Instructions:\n1. Walk normally while watching the graph\n2. Adjust threshold until step peaks cross the red line\n3. Optimal threshold is just above noise level\n4. Clear graph to reset"
+        android:textSize="12sp"
+        android:textColor="#888888"
+        android:layout_marginTop="16dp"/>
+
+</LinearLayout>

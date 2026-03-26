@@ -1,0 +1,1226 @@
+package com.example.wytv2.pdr;
+
+import android.content.Context;
+import android.hardware.Sensor;
+import android.hardware.SensorEvent;
+import android.hardware.SensorEventListener;
+import android.hardware.SensorManager;
+import android.util.Log;
+
+import com.example.wytv2.pdr.magneticfield.MagneticFieldLocalizationService;
+import com.example.wytv2.SensorFeatureBuffer;
+import com.example.wytv2.GestureDetectionModel;
+
+import java.util.ArrayList;
+import java.util.List;
+
+public class StepDetectionService implements SensorEventListener {
+    private SensorManager sensorManager;
+    private Sensor accelerometer;
+    private Sensor magnetometer;
+    private Sensor gyroscope;
+    private Context context;
+
+    // Step detection parameters
+    private float binaryThreshold = 1.0f; // Lowered for better walking sensitivity
+    private int windowSize = 18; // S = 18 from paper
+    private final int MIN_STEP_INTERVAL_MS = 100; // 100ms min between steps
+
+    // Acceleration data buffers
+    private List<Float> rawAccelerationBuffer = new ArrayList<>();
+    private List<Float> smoothedAccelerationBuffer = new ArrayList<>();
+    private static final int ACCEL_BUFFER_SIZE = 100; // 2 seconds at 50Hz
+
+    // Step tracking
+    private int totalStepCount = 0;
+    private int sessionStepCount = 0;
+    private long lastStepTime = 0;
+    private long lastStepDetectionTime = 0;
+
+    // For step length calculation
+    private float stepMaxAcc = 0;
+    private float stepMinAcc = Float.MAX_VALUE;
+    private List<Float> currentStepAccelerations = new ArrayList<>();
+
+    // Stationary detection
+    private boolean isStationary = false;
+    private boolean wasStationary = false;
+    private List<Float> stationaryBuffer = new ArrayList<>();
+    private static final int STATIONARY_BUFFER_SIZE = 40;
+    private static final float STATIONARY_THRESHOLD = 0.2f;
+
+    // Debug info
+    private float latestAcceleration = 0;
+
+    // Magnetic field localization
+    private MagneticFieldLocalizationService magneticService;
+    private boolean isInitializingPosition = false;
+    private boolean hasInitialPosition = false;
+    private float[] initialPosition = null; // [x, y, floor]
+    private static final int INITIALIZATION_STEPS = 10; // First 10 steps for initialization
+
+    // Calibration node tracking
+    private List<CalibrationNode> matchedCalibrationNodes = new ArrayList<>();
+
+    // ML Model Integration
+    private SensorFeatureBuffer featureBuffer = new SensorFeatureBuffer();
+    private long lastActivityPredictionTime = 0;
+    private static final long ACTIVITY_PREDICTION_INTERVAL_MS = 2000; // Every 2 seconds
+    private String currentActivity = "Unknown";
+    private float currentActivityConfidence = 0.0f;
+
+    // Latest sensor values for feature extraction
+    private float[] latestAccel = new float[3];
+    private float[] latestGyro = new float[3];
+    private float[] latestMag = new float[3];
+
+    // Heading tracking for particle filter
+    private float currentHeading = 0.0f;
+    private long lastGyroTimestamp = 0;
+
+    // WiFi RSSI Integration
+    private com.example.wytv2.wifi.WiFiRSSIService wifiService;
+    private com.example.wytv2.wifi.WiFiFingerprintDatabase wifiDatabase;
+    private float wifiRssiVariance = 0.0f;
+    private static final float RSSI_STABLE_THRESHOLD = 5.0f; // Low variance = stationary
+
+    // Particle Filter for Sensor Fusion
+    private com.example.wytv2.localization.ParticleFilterLocalization particleFilter;
+    private com.example.wytv2.localization.Position fusedPosition;
+
+    // Continuous Learning
+    private com.example.wytv2.ml.StepDataCollector dataCollector;
+    private com.example.wytv2.ml.RetrainingScheduler retrainingScheduler;
+
+    // Callback
+    public interface DeviceStateListener {
+        void onDeviceStateChanged(boolean isStationary, float confidence);
+
+        void onStepDetected(long timestamp, float stepLength, int totalSteps, int sessionSteps);
+
+        void onStepsReset();
+
+        void onInitialPositionEstimated(float x, float y, int floor);
+
+        void onCalibrationNodeMatched(float x, float y, String nodeId);
+
+        void onMagneticDataCollected(float[] magneticVector);
+
+        void onActivityRecognized(String activity, float confidence);
+
+        void onWiFiRSSIUpdate(java.util.List<com.example.wytv2.wifi.WiFiReading> readings, float variance);
+
+        void onPositionUpdated(com.example.wytv2.localization.Position fusedPosition);
+    }
+
+    /**
+     * Callback interface for calibration mode.
+     */
+    public interface CalibrationListener {
+        /**
+         * Called when a step is detected during calibration.
+         * 
+         * @param stepCount Current step count
+         * @param threshold Current detection threshold
+         */
+        void onCalibrationStepDetected(int stepCount, float threshold);
+    }
+
+    private DeviceStateListener stateListener;
+    private CalibrationListener calibrationListener;
+
+    // Calibration mode
+    private boolean calibrationMode = false;
+
+    // Calibration Node class
+    public static class CalibrationNode {
+        public float x, y;
+        public int floor;
+        public float[] magneticVector;
+        public String type; // "staircase", "elevator", "landmark"
+        public String nodeId; // e.g., "S1", "E1"
+
+        public CalibrationNode(float x, float y, int floor, float[] magneticVector,
+                String type, String nodeId) {
+            this.x = x;
+            this.y = y;
+            this.floor = floor;
+            this.magneticVector = magneticVector.clone();
+            this.type = type;
+            this.nodeId = nodeId;
+        }
+    }
+
+    // Binder for service binding
+    public class LocalBinder extends android.os.Binder {
+        public StepDetectionService getService() {
+            return StepDetectionService.this;
+        }
+    }
+
+    private final android.os.IBinder binder = new LocalBinder();
+
+    public android.os.IBinder getBinder() {
+        return binder;
+    }
+
+    public StepDetectionService(Context context) {
+        this.context = context;
+        sensorManager = (SensorManager) context.getSystemService(Context.SENSOR_SERVICE);
+        accelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER);
+        magnetometer = sensorManager.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD);
+        gyroscope = sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE);
+
+        // Initialize WiFi RSSI service
+        wifiService = new com.example.wytv2.wifi.WiFiRSSIService(context);
+        wifiDatabase = new com.example.wytv2.wifi.WiFiFingerprintDatabase();
+
+        // Initialize Particle Filter
+        particleFilter = new com.example.wytv2.localization.ParticleFilterLocalization();
+
+        // QUICK FIX: Initialize immediately with default position
+        if (particleFilter != null) {
+            com.example.wytv2.localization.Position defaultPos = 
+                new com.example.wytv2.localization.Position(0.0f, 0.0f, 1, 0.5f);
+            particleFilter.initialize(defaultPos, 500);
+            hasInitialPosition = true;
+            initialPosition = new float[] { 0.0f, 0.0f, 1.0f };
+            Log.d("StepDetection", "✓ Particle filter initialized at (0, 0)");
+        }
+
+        // Initialize Continuous Learning Data Collector
+        dataCollector = new com.example.wytv2.ml.StepDataCollector(context);
+
+        // Initialize Retraining Scheduler (prototype settings: every 50 steps)
+        retrainingScheduler = new com.example.wytv2.ml.RetrainingScheduler(context, dataCollector);
+        retrainingScheduler.setRetrainingInterval(50); // Frequent for prototyping
+        retrainingScheduler.setMinSamplesRequired(30);
+
+        // Set WiFi listener for false positive detection
+        wifiService.setRSSIListener(new com.example.wytv2.wifi.WiFiRSSIService.RSSIListener() {
+            @Override
+            public void onRSSIUpdate(java.util.List<com.example.wytv2.wifi.WiFiReading> readings, float variance) {
+                wifiRssiVariance = variance;
+                checkFalsePositiveWithWiFi();
+
+                // Forward to UI listener
+                if (stateListener != null) {
+                    stateListener.onWiFiRSSIUpdate(readings, variance);
+                }
+            }
+
+            @Override
+            public void onScanComplete(java.util.List<com.example.wytv2.wifi.WiFiReading> readings) {
+                // Estimate position from WiFi fingerprinting
+                if (wifiDatabase != null && readings != null && readings.size() >= 3) {
+                    // Use k-NN to estimate position (k=3)
+                    com.example.wytv2.wifi.WiFiFingerprintDatabase.Position wifiEstimate = wifiDatabase
+                            .estimatePosition(readings, 3);
+
+                    if (wifiEstimate != null && particleFilter != null &&
+                            particleFilter.isInitialized()) {
+                        // Convert WiFi position to localization position
+                        float confidence = Math.max(0.1f, 1.0f - (wifiEstimate.accuracy / 10.0f));
+                        com.example.wytv2.localization.Position wifiPos = new com.example.wytv2.localization.Position(
+                                wifiEstimate.x, wifiEstimate.y,
+                                wifiEstimate.floor, confidence);
+
+                        // Update particle filter with WiFi measurement
+                        particleFilter.updateWithWiFi(wifiPos, confidence);
+
+                        // Get updated fused position
+                        fusedPosition = particleFilter.getEstimatedPosition();
+                        if (fusedPosition != null && stateListener != null) {
+                            stateListener.onPositionUpdated(fusedPosition);
+
+                            Log.d("ParticleFilter", String.format(
+                                    "WiFi correction: (%.2f, %.2f) ±%.1fm → (%.2f, %.2f) conf: %.2f",
+                                    wifiPos.x, wifiPos.y, wifiEstimate.accuracy,
+                                    fusedPosition.x, fusedPosition.y, fusedPosition.confidence));
+                        }
+                    }
+                }
+            }
+        });
+
+        // Load calibrated threshold if available
+        loadCalibratedThreshold();
+
+        // Initialize magnetic field localization service
+        magneticService = new MagneticFieldLocalizationService(context);
+        magneticService.setPositionEstimationListener(
+                new MagneticFieldLocalizationService.PositionEstimationListener() {
+                    @Override
+                    public void onInitialPositionEstimated(float x, float y, int floor) {
+                        Log.d("StepDetection",
+                                String.format("✓ Initial position from magnetic: (%.2f, %.2f) floor %d",
+                                        x, y, floor));
+
+                        hasInitialPosition = true;
+                        initialPosition = new float[] { x, y, floor };
+
+                        // Initialize particle filter with initial position
+                        if (particleFilter != null) {
+                            com.example.wytv2.localization.Position initPos = new com.example.wytv2.localization.Position(
+                                    x, y, floor, 0.8f);
+                            particleFilter.initialize(initPos, 500);
+
+                            Log.d("StepDetection", String.format(
+                                    "Particle filter initialized at (%.1f, %.1f) with %d particles",
+                                    x, y, particleFilter.getParticleCount()));
+                        }
+
+                        if (stateListener != null) {
+                            stateListener.onInitialPositionEstimated(x, y, floor);
+                        }
+
+                        // Set the initial position for PDR tracking
+                        // This would be used if we were maintaining a position estimate
+                    }
+
+                    @Override
+                    public void onCalibrationNodeMatched(float x, float y) {
+                        Log.d("StepDetection",
+                                String.format("✓ Calibration node at (%.2f, %.2f)", x, y));
+
+                        // Store matched node
+                        matchedCalibrationNodes.add(new CalibrationNode(
+                                x, y,
+                                initialPosition != null ? (int) initialPosition[2] : 1,
+                                new float[] { 0, 0, 0 }, // Would use actual magnetic data
+                                "staircase",
+                                "CN" + matchedCalibrationNodes.size()));
+
+                        if (stateListener != null) {
+                            stateListener.onCalibrationNodeMatched(x, y,
+                                    "CN" + matchedCalibrationNodes.size());
+                        }
+
+                        // In a full implementation, you would correct your position here
+                    }
+
+    /**
+     * Load sample fingerprints for testing 3-sensor fusion.
+     * This populates WiFi and magnetic databases with hardcoded test data.
+     */
+    private void loadSampleFingerprints() {
+        Log.d("StepDetection", "Loading sample fingerprints for testing...");
+        
+        // Sample WiFi fingerprints at 5 positions
+        // Position 1: Origin (0, 0)
+        List<com.example.wytv2.wifi.WiFiReading> wifi1 = new ArrayList<>();
+        wifi1.add(new com.example.wytv2.wifi.WiFiReading("TestAP1", -45));
+        wifi1.add(new com.example.wytv2.wifi.WiFiReading("TestAP2", -65));
+        wifi1.add(new com.example.wytv2.wifi.WiFiReading("TestAP3", -75));
+        wifiDatabase.addFingerprint(0.0f, 0.0f, 1, wifi1);
+        
+        // Position 2: (5, 0) - 5m east
+        List<com.example.wytv2.wifi.WiFiReading> wifi2 = new ArrayList<>();
+        wifi2.add(new com.example.wytv2.wifi.WiFiReading("TestAP1", -55));
+        wifi2.add(new com.example.wytv2.wifi.WiFiReading("TestAP2", -50));
+        wifi2.add(new com.example.wytv2.wifi.WiFiReading("TestAP3", -70));
+        wifiDatabase.addFingerprint(5.0f, 0.0f, 1, wifi2);
+        
+        // Position 3: (10, 0) - 10m east
+        List<com.example.wytv2.wifi.WiFiReading> wifi3 = new ArrayList<>();
+        wifi3.add(new com.example.wytv2.wifi.WiFiReading("TestAP1", -70));
+        wifi3.add(new com.example.wytv2.wifi.WiFiReading("TestAP2", -45));
+        wifi3.add(new com.example.wytv2.wifi.WiFiReading("TestAP3", -60));
+        wifiDatabase.addFingerprint(10.0f, 0.0f, 1, wifi3);
+        
+        // Position 4: (0, 5) - 5m north
+        List<com.example.wytv2.wifi.WiFiReading> wifi4 = new ArrayList<>();
+        wifi4.add(new com.example.wytv2.wifi.WiFiReading("TestAP1", -50));
+        wifi4.add(new com.example.wytv2.wifi.WiFiReading("TestAP2", -70));
+        wifi4.add(new com.example.wytv2.wifi.WiFiReading("TestAP3", -55));
+        wifiDatabase.addFingerprint(0.0f, 5.0f, 1, wifi4);
+        
+        // Position 5: (5, 5) - center
+        List<com.example.wytv2.wifi.WiFiReading> wifi5 = new ArrayList<>();
+        wifi5.add(new com.example.wytv2.wifi.WiFiReading("TestAP1", -60));
+        wifi5.add(new com.example.wytv2.wifi.WiFiReading("TestAP2", -60));
+        wifi5.add(new com.example.wytv2.wifi.WiFiReading("TestAP3", -60));
+        wifiDatabase.addFingerprint(5.0f, 5.0f, 1, wifi5);
+        
+        // Sample Magnetic fingerprints at same 5 positions
+        // Using realistic magnetic field values (similar to current readings)
+        float[] mag1 = {44.0f, -28.0f, 24.0f};  // Origin
+        magneticService.addFingerprint(0.0f, 0.0f, 1, mag1);
+        
+        float[] mag2 = {42.0f, -30.0f, 22.0f};  // 5m east
+        magneticService.addFingerprint(5.0f, 0.0f, 1, mag2);
+        
+        float[] mag3 = {40.0f, -32.0f, 20.0f};  // 10m east
+        magneticService.addFingerprint(10.0f, 0.0f, 1, mag3);
+        
+        float[] mag4 = {46.0f, -26.0f, 26.0f};  // 5m north
+        magneticService.addFingerprint(0.0f, 5.0f, 1, mag4);
+        
+        float[] mag5 = {43.0f, -29.0f, 23.0f};  // center
+        magneticService.addFingerprint(5.0f, 5.0f, 1, mag5);
+        
+        Log.d("StepDetection", "✓ Loaded 5 WiFi and 5 magnetic sample fingerprints");
+    }
+
+                    @Override
+                    public void onMagneticDataCollected(float[] magneticVector) {
+                        if (stateListener != null) {
+                            stateListener.onMagneticDataCollected(magneticVector);
+                        }
+                    }
+                });
+
+        // Load magnetic fingerprint database (in real app, load from assets)
+        magneticService.loadFingerprintDatabase("TestBuilding");
+    }
+
+    public void setDeviceStateListener(DeviceStateListener listener) {
+        this.stateListener = listener;
+    }
+
+    public void setCalibrationListener(CalibrationListener listener) {
+        this.calibrationListener = listener;
+    }
+
+    public void setThreshold(float threshold) {
+        this.binaryThreshold = threshold;
+        Log.d("StepDetection", "Threshold updated to: " + threshold);
+    }
+
+    /**
+     * Start calibration mode.
+     * Resets step counter and enables calibration callbacks.
+     */
+    public void startCalibration(CalibrationListener listener) {
+        this.calibrationMode = true;
+        this.calibrationListener = listener;
+        this.sessionStepCount = 0;
+        Log.d("StepDetection", "Calibration mode started");
+    }
+
+    /**
+     * Stop calibration mode.
+     * Returns the number of steps detected during calibration.
+     */
+    public int stopCalibration() {
+        this.calibrationMode = false;
+        int detectedSteps = this.sessionStepCount;
+        this.calibrationListener = null;
+        Log.d("StepDetection", "Calibration mode stopped. Detected: " + detectedSteps);
+        return detectedSteps;
+    }
+
+    /**
+     * Save calibrated threshold to SharedPreferences.
+     */
+    public void saveCalibratedThreshold(float threshold) {
+        android.content.SharedPreferences prefs = context.getSharedPreferences("StepDetection", Context.MODE_PRIVATE);
+        prefs.edit()
+                .putFloat("calibrated_threshold", threshold)
+                .putBoolean("is_calibrated", true)
+                .apply();
+
+        this.binaryThreshold = threshold;
+        Log.d("StepDetection", "Calibrated threshold saved: " + threshold);
+    }
+
+    /**
+     * Load calibrated threshold from SharedPreferences.
+     */
+    private void loadCalibratedThreshold() {
+        android.content.SharedPreferences prefs = context.getSharedPreferences("StepDetection", Context.MODE_PRIVATE);
+
+        if (prefs.getBoolean("is_calibrated", false)) {
+            float calibratedThreshold = prefs.getFloat("calibrated_threshold", 1.0f);
+            this.binaryThreshold = calibratedThreshold;
+            Log.d("StepDetection", "Loaded calibrated threshold: " + calibratedThreshold);
+        }
+    }
+
+    public void start() {
+        sensorManager.registerListener(this, accelerometer, SensorManager.SENSOR_DELAY_UI);
+        if (magnetometer != null) {
+            sensorManager.registerListener(this, magnetometer, SensorManager.SENSOR_DELAY_UI);
+        }
+        if (gyroscope != null) {
+            sensorManager.registerListener(this, gyroscope, SensorManager.SENSOR_DELAY_UI);
+        }
+
+        // Start WiFi RSSI scanning
+        if (wifiService != null) {
+            wifiService.startScanning();
+        }
+
+        Log.d("StepDetection", "Service started with magnetic localization and WiFi RSSI");
+    }
+
+    public void stop() {
+        sensorManager.unregisterListener(this);
+
+        // Stop WiFi scanning
+        if (wifiService != null) {
+            wifiService.stopScanning();
+        }
+    }
+
+    @Override
+    public void onSensorChanged(SensorEvent event) {
+        long currentTime = System.currentTimeMillis();
+
+        switch (event.sensor.getType()) {
+            case Sensor.TYPE_ACCELEROMETER:
+                processAccelerometer(event.values, currentTime);
+                break;
+
+            case Sensor.TYPE_MAGNETIC_FIELD:
+                processMagnetometer(event.values, currentTime);
+                break;
+
+            case Sensor.TYPE_GYROSCOPE:
+                processGyroscope(event.values, currentTime);
+                break;
+        }
+    }
+
+    @Override
+    public void onAccuracyChanged(Sensor sensor, int accuracy) {
+        // Not needed
+    }
+
+    private void processAccelerometer(float[] values, long timestamp) {
+        // Store for feature extraction
+        latestAccel[0] = values[0];
+        latestAccel[1] = values[1];
+        latestAccel[2] = values[2];
+
+        float x = values[0];
+        float y = values[1];
+        float z = values[2];
+
+        // Calculate magnitude
+        float magnitude = (float) Math.sqrt(x * x + y * y + z * z);
+
+        // Remove gravity using high-pass filter
+        float linearAcc = removeGravity(magnitude);
+        latestAcceleration = linearAcc;
+
+        // Update stationary detection
+        wasStationary = isStationary;
+        updateStationaryDetection(linearAcc);
+
+        // Handle state transition
+        if (wasStationary && !isStationary) {
+            onStartedMoving();
+        }
+
+        // If stationary, don't process steps
+        if (isStationary) {
+            return;
+        }
+
+        // Process step detection continuously while moving
+        processAccelerationForStep(linearAcc, timestamp);
+        latestAcceleration = linearAcc;
+    }
+
+    private void processMagnetometer(float[] values, long timestamp) {
+        // Store for feature extraction
+        latestMag[0] = values[0];
+        latestMag[1] = values[1];
+        latestMag[2] = values[2];
+
+        // Pass magnetic data to the magnetic service
+        magneticService.onMagneticData(values, timestamp);
+
+        // Check for calibration nodes if we're moving
+        if (!isStationary) {
+            magneticService.checkForCalibrationNode(values);
+        }
+    }
+
+    /**
+     * Process gyroscope data to estimate heading.
+     */
+    private void processGyroscope(float[] values, long timestamp) {
+        // Store for feature extraction
+        latestGyro[0] = values[0];
+        latestGyro[1] = values[1];
+        latestGyro[2] = values[2];
+
+        // Integrate angular velocity to get heading
+        if (lastGyroTimestamp != 0) {
+            float dt = (timestamp - lastGyroTimestamp) / 1_000_000_000.0f; // Convert to seconds
+
+            // Use Z-axis (yaw) for heading in horizontal plane
+            float angularVelocityZ = values[2]; // rad/s
+
+            // Integrate to get heading change
+            float headingChange = angularVelocityZ * dt;
+            currentHeading += headingChange;
+
+            // Normalize heading to [0, 2π]
+            currentHeading = (float) ((currentHeading + 2 * Math.PI) % (2 * Math.PI));
+        }
+
+        lastGyroTimestamp = timestamp;
+
+        // Gyroscope data can be used for orientation estimation
+        // This would be used for magnetic vector rotation normalization
+        if (!isStationary) {
+            magneticService.updateGyroscopeData(values, timestamp);
+        }
+
+        // Add sensor data to feature buffer for ML inference
+        addToFeatureBuffer(timestamp);
+    }
+
+    // High-pass filter for gravity removal
+    private float gravity = 9.8f;
+
+    private float removeGravity(float magnitude) {
+        float alpha = 0.8f;
+        gravity = alpha * gravity + (1 - alpha) * magnitude;
+        return Math.abs(magnitude - gravity); // Use absolute value
+    }
+
+    private void processAccelerationForStep(float acceleration, long timestamp) {
+        // Add to raw buffer
+        rawAccelerationBuffer.add(acceleration);
+        if (rawAccelerationBuffer.size() > ACCEL_BUFFER_SIZE) {
+            rawAccelerationBuffer.remove(0);
+        }
+
+        // Apply smoothing (mean filter)
+        float smoothed = smoothAcceleration(rawAccelerationBuffer);
+        smoothedAccelerationBuffer.add(smoothed);
+        if (smoothedAccelerationBuffer.size() > ACCEL_BUFFER_SIZE) {
+            smoothedAccelerationBuffer.remove(0);
+        }
+
+        // Track min/max for step length calculation
+        if (acceleration > stepMaxAcc)
+            stepMaxAcc = acceleration;
+        if (acceleration < stepMinAcc)
+            stepMinAcc = acceleration;
+        currentStepAccelerations.add(acceleration);
+
+        // Check if we have enough data for step detection
+        if (smoothedAccelerationBuffer.size() >= windowSize) {
+            // Use sliding window approach
+            detectStepWithSlidingWindow(timestamp);
+        }
+
+        // If it's been too long since last step, reset step tracking
+        if (timestamp - lastStepDetectionTime > 2000) { // 2 seconds
+            resetStepTracking();
+        }
+    }
+
+    private float smoothAcceleration(List<Float> buffer) {
+        if (buffer.isEmpty())
+            return 0;
+
+        // Simple moving average of last 5 samples
+        int count = Math.min(5, buffer.size());
+        float sum = 0;
+        for (int i = buffer.size() - count; i < buffer.size(); i++) {
+            sum += buffer.get(i);
+        }
+        return sum / count;
+    }
+
+    private void detectStepWithSlidingWindow(long timestamp) {
+        // Get the latest window of smoothed data
+        int startIdx = smoothedAccelerationBuffer.size() - windowSize;
+        List<Float> window = new ArrayList<>();
+        for (int i = startIdx; i < smoothedAccelerationBuffer.size(); i++) {
+            window.add(smoothedAccelerationBuffer.get(i));
+        }
+
+        // Binarize the window
+        int onesCount = 0;
+        boolean[] binary = new boolean[windowSize];
+        for (int i = 0; i < windowSize; i++) {
+            binary[i] = window.get(i) > binaryThreshold;
+            if (binary[i])
+                onesCount++;
+        }
+
+        // Check for step pattern (Algorithm 1 from paper)
+        if (onesCount >= (windowSize / 2)) {
+            // Check for valid pulse pattern
+            if (hasValidPulsePattern(binary)) {
+                // Check minimum time between steps
+                if (timestamp - lastStepTime >= MIN_STEP_INTERVAL_MS) {
+                    // Step detected!
+                    onStepDetected(timestamp);
+                    lastStepTime = timestamp;
+                    lastStepDetectionTime = timestamp;
+
+                    // Reset for next step
+                    resetStepTracking();
+                }
+            }
+        }
+    }
+
+    private boolean hasValidPulsePattern(boolean[] binary) {
+        // Look for pattern: 1s followed by 0s (a pulse)
+        boolean inOnesSection = false;
+        boolean inZerosSection = false;
+        int onesCount = 0;
+        int zerosAfterOnes = 0;
+
+        for (boolean value : binary) {
+            if (value) {
+                if (!inOnesSection) {
+                    inOnesSection = true;
+                }
+                if (inZerosSection) {
+                    // Found 1s after zeros - not a clean pulse
+                    return false;
+                }
+                onesCount++;
+            } else {
+                if (inOnesSection) {
+                    inZerosSection = true;
+                }
+                if (inZerosSection) {
+                    zerosAfterOnes++;
+                }
+            }
+        }
+
+        // Valid pulse if:
+        // 1. We have both ones and zeros
+        // 2. Ones count is reasonable (not too few, not too many)
+        // 3. Zeros come after ones
+        return inOnesSection && inZerosSection &&
+                onesCount >= 5 && onesCount <= windowSize * 0.7 &&
+                zerosAfterOnes >= 3;
+    }
+
+    private void onStepDetected(long timestamp) {
+        // ========================================
+        // GESTURE-BASED STEP FILTERING (NEW!)
+        // ========================================
+        // Block false positive steps from hand gestures
+        // SKIP THIS CHECK DURING CALIBRATION MODE to allow all steps
+        // TEMPORARILY DISABLED (|| true) - ML model too aggressive
+        if (!calibrationMode && false && !isStepAllowedForActivity(currentActivity, currentActivityConfidence)) {
+            Log.d("StepDetection", String.format(
+                    "Step BLOCKED: activity=%s (%.1f%%) - likely hand gesture or stationary",
+                    currentActivity, currentActivityConfidence * 100));
+
+            // Reset step tracking but don't increment counters
+            stepMaxAcc = 0;
+            stepMinAcc = Float.MAX_VALUE;
+            currentStepAccelerations.clear();
+            return; // Block this false positive step
+        }
+
+        // Calculate step length
+        float stepLength = calculateStepLength();
+
+        // Increment counters (only if step is allowed)
+        totalStepCount++;
+        sessionStepCount++;
+
+        // Update particle filter with prediction step
+        if (particleFilter != null && particleFilter.isInitialized()) {
+            // Use current heading from gyroscope integration
+            particleFilter.predict(stepLength, currentHeading);
+
+            // Get updated position estimate
+            fusedPosition = particleFilter.getEstimatedPosition();
+
+            if (fusedPosition != null && stateListener != null) {
+                stateListener.onPositionUpdated(fusedPosition);
+
+                Log.d("ParticleFilter", String.format(
+                        "Position: (%.2f, %.2f) heading: %.1f° confidence: %.2f",
+                        fusedPosition.x, fusedPosition.y,
+                        Math.toDegrees(currentHeading), fusedPosition.confidence));
+            }
+        }
+
+        // Handle magnetic field initialization (first 10 steps)
+        if (sessionStepCount <= INITIALIZATION_STEPS && !hasInitialPosition) {
+            if (sessionStepCount == 1) {
+                // Start collecting magnetic data for initialization
+                magneticService.startInitialPositionEstimation();
+                isInitializingPosition = true;
+                Log.d("StepDetection", "Starting magnetic field initialization...");
+            }
+
+            // Notify magnetic service about step
+            magneticService.onStepDetected();
+
+            if (sessionStepCount == INITIALIZATION_STEPS) {
+                // We've collected enough steps, process for initialization
+                isInitializingPosition = false;
+                Log.d("StepDetection", "Collected 10 steps for magnetic initialization");
+            }
+        }
+
+        Log.d("StepDetection", String.format("Step #%d detected, length: %.2fm",
+                totalStepCount, stepLength));
+
+        // Notify listener
+        if (stateListener != null) {
+            stateListener.onStepDetected(timestamp, stepLength, totalStepCount, sessionStepCount);
+        }
+
+        // Notify calibration listener if in calibration mode
+        if (calibrationMode && calibrationListener != null) {
+            calibrationListener.onCalibrationStepDetected(sessionStepCount, binaryThreshold);
+        }
+
+        // Collect data for continuous learning
+        collectStepData(timestamp, true); // true = actual step detected
+
+        // Update particle filter with magnetic measurement (if available)
+        if (particleFilter != null && magneticService != null && latestMag != null) {
+            float[] magPos = magneticService.getCurrentPosition(latestMag);
+            if (magPos != null && magPos.length >= 3) {
+                com.example.wytv2.localization.Position magneticPosition = 
+                    new com.example.wytv2.localization.Position(
+                        magPos[0], magPos[1], (int)magPos[2], 0.7f);
+                
+                float confidence = 0.7f; // Moderate confidence for magnetic
+                particleFilter.updateWithMagnetic(magneticPosition, confidence);
+                
+                Log.d("StepDetection", String.format(
+                    "Magnetic correction: (%.2f, %.2f) floor %d, confidence: %.2f",
+                    magPos[0], magPos[1], (int)magPos[2], confidence));
+            }
+        }
+
+        // Check if retraining should be triggered
+        if (retrainingScheduler != null) {
+            retrainingScheduler.checkAndScheduleRetraining(totalStepCount);
+        }
+        // Reset for next step
+        stepMaxAcc = 0;
+        stepMinAcc = Float.MAX_VALUE;
+        currentStepAccelerations.clear();
+    }
+
+    private float calculateStepLength() {
+        if (currentStepAccelerations.size() < 5) {
+            return 0.7f; // Default
+        }
+
+        // Calculate acceleration statistics
+        float range = stepMaxAcc - stepMinAcc;
+        if (range <= 0)
+            return 0.7f;
+
+        // Adaptive Weinberg model with frequency adjustment
+        float baseLength = 0.7f;
+        float adjustment = (float) Math.pow(range, 0.25);
+
+        // Estimate frequency from step interval
+        float frequency = 0;
+        if (lastStepTime > 0 && lastStepDetectionTime > 0) {
+            float interval = (lastStepDetectionTime - lastStepTime) / 1000.0f;
+            if (interval > 0) {
+                frequency = 1.0f / interval;
+                // Adjust for frequency (higher frequency = shorter steps)
+                adjustment *= (2.0f / (1 + frequency));
+            }
+        }
+
+        float stepLength = baseLength * adjustment;
+
+        // Apply reasonable bounds
+        return Math.max(0.4f, Math.min(1.2f, stepLength));
+    }
+
+    private void resetStepTracking() {
+        stepMaxAcc = 0;
+        stepMinAcc = Float.MAX_VALUE;
+        currentStepAccelerations.clear();
+    }
+
+    private void updateStationaryDetection(float acceleration) {
+        // Add to stationary buffer (absolute value)
+        stationaryBuffer.add(Math.abs(acceleration));
+        if (stationaryBuffer.size() > STATIONARY_BUFFER_SIZE) {
+            stationaryBuffer.remove(0);
+        }
+
+        if (stationaryBuffer.size() >= 20) { // Need some data
+            float stdDev = calculateStdDev(stationaryBuffer);
+            boolean newStationary = stdDev < STATIONARY_THRESHOLD;
+
+            if (newStationary != isStationary) {
+                isStationary = newStationary;
+
+                if (stateListener != null) {
+                    float confidence = 1.0f - (stdDev / STATIONARY_THRESHOLD);
+                    stateListener.onDeviceStateChanged(isStationary, confidence);
+                }
+
+                Log.d("StepDetection", "State: " +
+                        (isStationary ? "STATIONARY" : "MOVING") +
+                        " (stdDev: " + String.format("%.3f", stdDev) + ")");
+            }
+        }
+    }
+
+    private void onStartedMoving() {
+        Log.d("StepDetection", "Started moving - resetting session steps");
+
+        // Reset only session steps when starting to move after being stationary
+        sessionStepCount = 0;
+        hasInitialPosition = false;
+        initialPosition = null;
+        matchedCalibrationNodes.clear();
+
+        // Clear buffers for fresh start
+        rawAccelerationBuffer.clear();
+        smoothedAccelerationBuffer.clear();
+        stationaryBuffer.clear();
+        resetStepTracking();
+        lastStepTime = 0;
+        lastStepDetectionTime = System.currentTimeMillis();
+
+        if (stateListener != null) {
+            stateListener.onStepsReset();
+        }
+    }
+
+    private float calculateStdDev(List<Float> buffer) {
+        if (buffer.isEmpty())
+            return 0;
+
+        float mean = 0;
+        for (float val : buffer)
+            mean += val;
+        mean /= buffer.size();
+
+        float sumSq = 0;
+        for (float val : buffer) {
+            sumSq += (val - mean) * (val - mean);
+        }
+
+        return (float) Math.sqrt(sumSq / buffer.size());
+    }
+
+    // Public methods
+    public int getTotalStepCount() {
+        return totalStepCount;
+    }
+
+    public int getSessionStepCount() {
+        return sessionStepCount;
+    }
+
+    public boolean isStationary() {
+        return isStationary;
+    }
+
+    public float getBinaryThreshold() {
+        return binaryThreshold;
+    }
+
+    public boolean hasInitialPosition() {
+        return hasInitialPosition;
+    }
+
+    public float[] getInitialPosition() {
+        return initialPosition;
+    }
+
+    public List<CalibrationNode> getMatchedCalibrationNodes() {
+        return matchedCalibrationNodes;
+    }
+
+    public void setBinaryThreshold(float threshold) {
+        this.binaryThreshold = threshold;
+        Log.d("StepDetection", "Threshold set to: " + threshold);
+    }
+
+    public int getWindowSize() {
+        return windowSize;
+    }
+
+    public void setWindowSize(int size) {
+        this.windowSize = size;
+    }
+
+    public void resetAllSteps() {
+        totalStepCount = 0;
+        sessionStepCount = 0;
+        hasInitialPosition = false;
+        initialPosition = null;
+        matchedCalibrationNodes.clear();
+
+        if (stateListener != null) {
+            stateListener.onStepsReset();
+        }
+        Log.d("StepDetection", "All steps reset");
+    }
+
+    // Debug methods
+    public float getLatestAcceleration() {
+        return latestAcceleration;
+    }
+
+    public int getBufferSize() {
+        return rawAccelerationBuffer.size();
+    }
+
+    public long getTimeSinceLastStep() {
+        return System.currentTimeMillis() - lastStepDetectionTime;
+    }
+
+    // Magnetic service access
+    public MagneticFieldLocalizationService getMagneticService() {
+        return magneticService;
+    }
+
+    public void loadMagneticDatabase(String buildingName) {
+        magneticService.loadFingerprintDatabase(buildingName);
+    }
+
+    // ML Model Integration Methods
+
+    /**
+     * Add current sensor readings to feature buffer and run prediction if ready.
+     */
+    private void addToFeatureBuffer(long timestamp) {
+        // Add sensor reading to buffer
+        featureBuffer.addReading(latestAccel, latestGyro, latestMag, timestamp);
+
+        // Check if it's time to run prediction
+        if (timestamp - lastActivityPredictionTime >= ACTIVITY_PREDICTION_INTERVAL_MS) {
+            runActivityPrediction(timestamp);
+        }
+    }
+
+    /**
+     * Run ML model inference on buffered sensor data.
+     */
+    private void runActivityPrediction(long timestamp) {
+        if (!featureBuffer.isReady()) {
+            return; // Not enough data yet
+        }
+
+        // Extract features
+        float[][] features = featureBuffer.extractFeatures();
+        if (features == null || features.length == 0) {
+            return;
+        }
+
+        // Get the most recent feature vector (last row)
+        float[] featureVector = features[features.length - 1];
+
+        // Predict activity using 5-class gesture detection model
+        GestureDetectionModel.PredictionResult result = GestureDetectionModel.predictWithConfidence(featureVector);
+
+        currentActivity = result.activity;
+        currentActivityConfidence = result.confidence;
+        lastActivityPredictionTime = timestamp;
+
+        // Adaptive threshold adjustment based on activity
+        adjustThresholdForActivity(currentActivity, currentActivityConfidence);
+
+        // Log prediction with all class probabilities
+        Log.d("StepDetection", String.format(
+                "Activity: %s (%.1f%%) | Walk=%.2f Stand=%.2f Sit=%.2f Gesture=%.2f Type=%.2f - Threshold: %.2f",
+                currentActivity, currentActivityConfidence * 100,
+                result.probabilities[0], result.probabilities[1], result.probabilities[2],
+                result.probabilities[3], result.probabilities[4],
+                binaryThreshold));
+
+        // Notify listener
+        if (stateListener != null) {
+            stateListener.onActivityRecognized(currentActivity, currentActivityConfidence);
+        }
+    }
+
+    /**
+     * Adjust step detection threshold based on predicted activity.
+     * Higher thresholds for non-walking activities to reduce false positives.
+     */
+    private void adjustThresholdForActivity(String activity, float confidence) {
+        // Only adjust if confidence is reasonable
+        if (confidence < 0.5f) {
+            return; // Not confident enough
+        }
+
+        float newThreshold = binaryThreshold;
+
+        switch (activity) {
+            case "Walking":
+                // VERY LOW threshold for walking - maximize sensitivity
+                newThreshold = 0.9f; // Reduced from 1.1f
+                break;
+
+            case "Standing":
+                // Medium threshold for standing (might be slow walking)
+                newThreshold = 1.2f;
+                break;
+
+            case "Sitting":
+            case "Hand Gesture":
+            case "Typing":
+                // High threshold for non-walking activities
+                newThreshold = 1.8f;
+                break;
+
+            default:
+                // Unknown activity - use moderate threshold
+                newThreshold = 1.3f;
+                break;
+        }
+
+        // Smooth threshold changes
+        binaryThreshold = binaryThreshold * 0.7f + newThreshold * 0.3f;
+    }
+
+    /**
+     * Determine if step detection should be allowed based on current activity.
+     * This is the KEY method for reducing false positives from hand gestures!
+     *
+     * @param activity   Current detected activity
+     * @param confidence Confidence of the prediction
+     * @return true if steps should be counted, false if they should be blocked
+     */
+    private boolean isStepAllowedForActivity(String activity, float confidence) {
+        // Require minimum confidence for any decision
+        if (confidence < 0.5f) {
+            return true; // Low confidence - allow by default to avoid blocking real steps
+        }
+
+        // ALLOW STEPS for walking activity (LOWERED threshold for better sensitivity)
+        if (activity.equals("Walking") && confidence > 0.5f) { // Reduced from 0.6f
+            return true; // Medium+ confidence walking - allow steps
+        }
+
+        // BLOCK STEPS for hand gestures and typing (INCREASED threshold to be more
+        // selective)
+        if (activity.equals("Hand Gesture") || activity.equals("Typing")) {
+            if (confidence > 0.75f) { // Increased from 0.7f
+                return false; // Very high confidence gesture/typing - block steps
+            }
+        }
+
+        // BLOCK STEPS for sitting (very unlikely to be walking)
+        if (activity.equals("Sitting") && confidence > 0.7f) {
+            return false; // High confidence sitting - block steps
+        }
+
+        // CONDITIONAL for standing (might be slow walking or stationary)
+        if (activity.equals("Standing")) {
+            if (confidence > 0.8f) {
+                return false; // Very high confidence standing - likely stationary, block
+            } else if (confidence > 0.6f) {
+                return true; // Medium confidence - might be slow walking, allow
+            }
+        }
+
+        // Default: allow steps (err on the side of not blocking real walking)
+        return true;
+    }
+
+    /**
+     * Get the current recognized activity.
+     */
+    public String getCurrentActivity() {
+        return currentActivity;
+    }
+
+    /**
+     * Get the confidence of the current activity prediction.
+     */
+    public float getCurrentActivityConfidence() {
+        return currentActivityConfidence;
+    }
+
+    private void checkFalsePositiveWithWiFi() {
+        if (wifiRssiVariance < RSSI_STABLE_THRESHOLD) {
+            float wifiAdjustedThreshold = Math.max(binaryThreshold, 1.7f);
+            if (Math.abs(wifiAdjustedThreshold - binaryThreshold) > 0.05f) {
+                binaryThreshold = wifiAdjustedThreshold;
+                Log.d("StepDetection", String.format(
+                        "WiFi stable (variance: %.2f) - increased threshold to %.2f",
+                        wifiRssiVariance, binaryThreshold));
+            }
+        }
+    }
+
+    public com.example.wytv2.wifi.WiFiFingerprintDatabase getWiFiDatabase() {
+        return wifiDatabase;
+    }
+
+    public float getWiFiRSSIVariance() {
+        return wifiRssiVariance;
+    }
+
+    /**
+     * Collect step data for continuous learning.
+     */
+    private void collectStepData(long timestamp, boolean wasActualStep) {
+        if (dataCollector == null || !dataCollector.isCollectingEnabled()) {
+            return;
+        }
+
+        // Extract features from buffer
+        float[][] features = featureBuffer.extractFeatures();
+        if (features == null || features.length == 0) {
+            return;
+        }
+
+        // Get most recent feature vector
+        float[] featureVector = features[features.length - 1];
+
+        // Determine source
+        String source = calibrationMode ? "calibration" : "normal";
+
+        // Record data point
+        dataCollector.recordStepCandidate(
+                latestAccel.clone(),
+                latestGyro.clone(),
+                latestMag.clone(),
+                featureVector,
+                wasActualStep,
+                binaryThreshold,
+                currentActivity,
+                currentActivityConfidence,
+                source);
+    }
+
+    /**
+     * Get retraining scheduler for UI access.
+     */
+    public com.example.wytv2.ml.RetrainingScheduler getRetrainingScheduler() {
+        return retrainingScheduler;
+    }
+
+    /**
+     * Get model retrainer for UI access.
+     */
+    public com.example.wytv2.ml.ModelRetrainer getModelRetrainer() {
+        if (retrainingScheduler == null)
+            return null;
+        return new com.example.wytv2.ml.ModelRetrainer(context, dataCollector);
+    }
+
+    /**
+     * Get data collector for external access.
+     */
+    public com.example.wytv2.ml.StepDataCollector getDataCollector() {
+        return dataCollector;
+    }
+
+    /**
+     * Get current heading from gyroscope integration.
+     */
+    public float getCurrentHeading() {
+        return currentHeading;
+    }
+
+}

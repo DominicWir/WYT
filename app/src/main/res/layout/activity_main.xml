@@ -1,0 +1,273 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#000000">
+
+    <!-- Map fills entire screen -->
+    <com.example.wytv2.visualization.LocationMapView
+        android:id="@+id/location_map_view"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#000000"/>
+
+    <!-- Current zone label (top-center overlay, shown only when inside a zone) -->
+    <TextView
+        android:id="@+id/tv_current_zone"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|center_horizontal"
+        android:layout_marginTop="12dp"
+        android:paddingHorizontal="16dp"
+        android:paddingVertical="6dp"
+        android:background="#CC000000"
+        android:textSize="15sp"
+        android:textColor="#FFE040FB"
+        android:textStyle="bold"
+        android:visibility="gone"/>
+
+    <!-- Activity state label (bottom-left, subtle) -->
+    <TextView
+        android:id="@+id/device_state"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|start"
+        android:layout_marginStart="8dp"
+        android:layout_marginBottom="8dp"
+        android:textSize="11sp"
+        android:textColor="#88AAAAAA"
+        android:text="DETECTING..."/>
+
+    <!-- Position info (bottom-center, subtle) -->
+    <LinearLayout
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|center_horizontal"
+        android:layout_marginBottom="8dp"
+        android:orientation="horizontal">
+
+        <TextView
+            android:id="@+id/tv_position_compact"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="(0.0, 0.0)"
+            android:textSize="11sp"
+            android:textColor="#664CAF50"
+            android:layout_marginEnd="10dp"/>
+
+        <TextView
+            android:id="@+id/tv_heading_compact"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="0°"
+            android:textSize="11sp"
+            android:textColor="#66CCCCCC"/>
+
+    </LinearLayout>
+
+    <!-- Deviation (bottom-right, subtle) -->
+    <TextView
+        android:id="@+id/tv_current_deviation"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|end"
+        android:layout_marginEnd="8dp"
+        android:layout_marginBottom="8dp"
+        android:textSize="11sp"
+        android:textColor="#66FFFFFF"
+        android:text="--"/>
+
+    <!-- FAB: open menu -->
+    <ImageButton
+        android:id="@+id/fab_menu"
+        android:layout_width="56dp"
+        android:layout_height="56dp"
+        android:layout_gravity="bottom|end"
+        android:layout_margin="12dp"
+        android:layout_marginBottom="30dp"
+        android:background="#CC1A1A2E"
+        android:src="@android:drawable/ic_menu_more"
+        android:tint="#FFFFFF"
+        android:contentDescription="Menu"
+        android:elevation="8dp"/>
+
+    <!-- ===== Sliding bottom menu panel ===== -->
+    <LinearLayout
+        android:id="@+id/menu_panel"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom"
+        android:orientation="vertical"
+        android:background="#EE0D0D1A"
+        android:paddingTop="16dp"
+        android:paddingBottom="12dp"
+        android:paddingHorizontal="12dp"
+        android:visibility="gone"
+        android:elevation="12dp">
+
+        <!-- Row 1: Top-level menu buttons -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginBottom="4dp">
+
+            <Button
+                android:id="@+id/btn_edit_map"
+                android:layout_width="0dp"
+                android:layout_height="48dp"
+                android:layout_weight="1"
+                android:text="✏️ Edit Map"
+                android:textSize="13sp"
+                android:backgroundTint="#1565C0"
+                android:textColor="#FFFFFF"
+                android:layout_marginEnd="8dp"/>
+
+            <Button
+                android:id="@+id/btn_alerts"
+                android:layout_width="0dp"
+                android:layout_height="48dp"
+                android:layout_weight="1"
+                android:text="🔔 Alerts"
+                android:textSize="13sp"
+                android:backgroundTint="#E65100"
+                android:textColor="#FFFFFF"/>
+
+        </LinearLayout>
+
+        <!-- Edit Map sub-panel (collapsed by default) -->
+        <LinearLayout
+            android:id="@+id/edit_map_panel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:visibility="gone"
+            android:background="#1A2A4A"
+            android:paddingTop="8dp"
+            android:paddingBottom="4dp"
+            android:paddingHorizontal="8dp"
+            android:layout_marginTop="4dp">
+
+            <!-- Edit sub-row 1 -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:layout_marginBottom="6dp">
+
+                <Button
+                    android:id="@+id/btn_save_zone"
+                    android:layout_width="0dp"
+                    android:layout_height="40dp"
+                    android:layout_weight="1"
+                    android:text="📌 Save Zone"
+                    android:textSize="11sp"
+                    android:backgroundTint="#6A1B9A"
+                    android:textColor="#FFFFFF"
+                    android:layout_marginEnd="6dp"/>
+
+                <Button
+                    android:id="@+id/btn_move_zone"
+                    android:layout_width="0dp"
+                    android:layout_height="40dp"
+                    android:layout_weight="1"
+                    android:text="↔ Move Zone"
+                    android:textSize="11sp"
+                    android:backgroundTint="#37474F"
+                    android:textColor="#FFFFFF"
+                    android:layout_marginEnd="6dp"/>
+
+                <Button
+                    android:id="@+id/btn_switch_floor"
+                    android:layout_width="0dp"
+                    android:layout_height="40dp"
+                    android:layout_weight="1"
+                    android:text="🏢 Floor"
+                    android:textSize="11sp"
+                    android:backgroundTint="#00695C"
+                    android:textColor="#FFFFFF"/>
+
+            </LinearLayout>
+
+            <!-- Edit sub-row 2: Zones + Center -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:layout_marginTop="6dp">
+
+                <Button
+                    android:id="@+id/btn_manage_zones"
+                    android:layout_width="0dp"
+                    android:layout_height="40dp"
+                    android:layout_weight="1"
+                    android:text="🗂 Zones"
+                    android:textSize="12sp"
+                    android:backgroundTint="#37474F"
+                    android:textColor="#FFFFFF"
+                    android:layout_marginEnd="6dp"/>
+
+                <Button
+                    android:id="@+id/btn_center_view"
+                    android:layout_width="0dp"
+                    android:layout_height="40dp"
+                    android:layout_weight="1"
+                    android:text="🎯 Center"
+                    android:textSize="12sp"
+                    android:backgroundTint="#1565C0"
+                    android:textColor="#FFFFFF"/>
+
+            </LinearLayout>
+
+            <!-- Edit sub-row 3: Clear Path + Toggle Path -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:layout_marginTop="6dp">
+
+                <Button
+                    android:id="@+id/btn_clear_path"
+                    android:layout_width="0dp"
+                    android:layout_height="40dp"
+                    android:layout_weight="1"
+                    android:text="🗑 Clear Path"
+                    android:textSize="12sp"
+                    android:backgroundTint="#B71C1C"
+                    android:textColor="#FFFFFF"
+                    android:layout_marginEnd="6dp"/>
+
+                <Button
+                    android:id="@+id/btn_toggle_path"
+                    android:layout_width="0dp"
+                    android:layout_height="40dp"
+                    android:layout_weight="1"
+                    android:text="〰 Path: ON"
+                    android:textSize="12sp"
+                    android:backgroundTint="#2E7D32"
+                    android:textColor="#FFFFFF"/>
+
+            </LinearLayout>
+
+        </LinearLayout>
+
+    </LinearLayout>
+
+    <!-- ===== Hidden compatibility stubs (keep IDs alive) ===== -->
+    <TextView android:id="@+id/step_count"            android:layout_width="0dp" android:layout_height="0dp" android:visibility="gone"/>
+    <TextView android:id="@+id/threshold_value"       android:layout_width="0dp" android:layout_height="0dp" android:visibility="gone"/>
+    <Button   android:id="@+id/decrease_threshold"    android:layout_width="0dp" android:layout_height="0dp" android:visibility="gone"/>
+    <Button   android:id="@+id/reset_steps"           android:layout_width="0dp" android:layout_height="0dp" android:visibility="gone"/>
+    <Button   android:id="@+id/increase_threshold"    android:layout_width="0dp" android:layout_height="0dp" android:visibility="gone"/>
+    <TextView android:id="@+id/ml_buffer_status"       android:layout_width="0dp" android:layout_height="0dp" android:visibility="gone"/>
+    <TextView android:id="@+id/ml_activity_prediction" android:layout_width="0dp" android:layout_height="0dp" android:visibility="gone"/>
+    <TextView android:id="@+id/ml_threshold_status"    android:layout_width="0dp" android:layout_height="0dp" android:visibility="gone"/>
+    <TextView android:id="@+id/ml_last_update"         android:layout_width="0dp" android:layout_height="0dp" android:visibility="gone"/>
+    <TextView android:id="@+id/wifi_ap_count"          android:layout_width="0dp" android:layout_height="0dp" android:visibility="gone"/>
+    <TextView android:id="@+id/wifi_variance"          android:layout_width="0dp" android:layout_height="0dp" android:visibility="gone"/>
+    <TextView android:id="@+id/wifi_status"            android:layout_width="0dp" android:layout_height="0dp" android:visibility="gone"/>
+    <TextView android:id="@+id/wifi_strongest_ap"      android:layout_width="0dp" android:layout_height="0dp" android:visibility="gone"/>
+    <!-- old trigger stub -->
+    <Button android:id="@+id/btn_set_trigger" android:layout_width="0dp" android:layout_height="0dp" android:visibility="gone"/>
+
+</FrameLayout>

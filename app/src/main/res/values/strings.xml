@@ -1,0 +1,13 @@
+<resources>
+    <string name="app_name">WYT V2</string>
+    <string name="position_0_00_0_00_m">Position: (0.00, 0.00)m</string>
+    <string name="current_position">Current Position</string>
+    <string name="step_length_0_70m">Step Length: 0.70m</string>
+    <string name="pace_0_steps_min">Pace: 0 steps/min</string>
+    <string name="steps_0">Steps: 0</string>
+    <string name="confidence">Confidence: --%</string>
+    <string name="status_detecting">Status: DETECTING...</string>
+    <string name="accel_nbuffer">Accel: --\nBuffer: --</string>
+    <string name="reset">RESET</string>
+    <string name="walk_normally_adjust_threshold_if_steps_aren_t_detected">Walk normally. Adjust threshold if steps aren\'t detected.</string>
+</resources>

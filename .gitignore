@@ -1,0 +1,27 @@
+# Android generated
+*.iml
+.gradle/
+local.properties
+.idea/
+build/
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Keystore — NEVER commit these
+*.jks
+*.keystore
+keystore.properties
+release_keystore_base64.txt
+
+# Python / ML tooling
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+*.log
+
+# macOS
+.DS_Store

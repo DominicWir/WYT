@@ -1,0 +1,75 @@
+# Model hyperparameters
+model:
+  feature_dim: 70  # Adjust based on your feature extraction settings
+  hidden_size: 256
+  num_layers: 3
+  head_size: 32
+  num_attention_heads: 8
+  dropout: 0.1
+  output_position_dim: 3  # (x, y, floor)
+  output_activity_dim: 5  # Number of activity classes
+
+# Feature extraction settings
+feature_extraction:
+  window_size: 50  # Number of samples per window
+  stride: 25  # Window stride (50% overlap)
+  percentiles: [25.0, 50.0, 75.0]
+
+# Training configuration
+training:
+  batch_size: 32
+  num_epochs: 30  # Reduced for initial test, increase to 100 for full training
+  learning_rate: 0.001
+  weight_decay: 0.00001
+  val_ratio: 0.2
+  random_seed: 42
+  sequence_length: 50  # Increased for better temporal context
+  
+  # Loss weights
+  position_weight: 0.5  # Reduced since positions are estimated
+  activity_weight: 1.5  # Increased for better activity recognition
+  
+  # Optimization
+  grad_clip: 1.0
+  use_uncertainty: false
+  
+  # Checkpointing
+  checkpoint_dir: checkpoints
+  save_every: 5
+
+# Data preprocessing
+preprocessing:
+  missing_data_method: "interpolate"  # Options: interpolate, forward_fill, zero
+  outlier_threshold: 3.0  # Z-score threshold
+  normalize: true
+
+# Sensor configuration
+sensors:
+  imu:
+    channels: 6  # acc_x, acc_y, acc_z, gyro_x, gyro_y, gyro_z
+    sampling_rate: 50  # Hz
+  
+  magnetic:
+    channels: 3  # mag_x, mag_y, mag_z
+    sampling_rate: 50  # Hz
+  
+  wifi:
+    enabled: true
+    max_aps: 10  # Maximum number of access points
+
+# Activity labels
+activities:
+  0: "stationary"
+  1: "walking"
+  2: "running"
+  3: "stairs_up"
+  4: "stairs_down"
+
+# Export settings
+export:
+  onnx:
+    opset_version: 12
+    dynamic_axes: true
+  
+  tflite:
+    quantization: false
