@@ -53,17 +53,10 @@ public class MainActivity extends AppCompatActivity {
     }
 
     // UI Elements
-    private TextView tvStepCount;
-    private TextView tvSessionSteps;
     private TextView tvState;
-    private TextView tvStepLength;
-    private TextView tvThresholdValue;
-    private TextView tvPosition;
-    private TextView tvCalibration;
-    private TextView tvMagnetic;
+    private TextView tvSessionSteps;
     private SeekBar thresholdSeekBar;
     private Button btnResetSteps;
-    private Button btnStartGraph;
 
     // ML Debug Panel UI
     private TextView tvMlBufferStatus;
@@ -104,7 +97,15 @@ public class MainActivity extends AppCompatActivity {
     private LinearLayout menuPanel;
     private boolean menuOpen = false;
 
-    // ---- [REMOVABLE] Barometer floor detection — delete this field + initBarometerDetector() to remove
+    // 15-second inactivity auto-close timer
+    private final Handler inactivityHandler = new Handler(Looper.getMainLooper());
+    private static final long INACTIVITY_TIMEOUT_MS = 15_000L;
+    private final Runnable inactivityRunnable = () -> {
+        closeMenu();
+        android.util.Log.d("MainActivity", "Edit menu closed after 15 s of inactivity");
+    };
+
+    // Barometer floor detection
     private BarometerFloorDetector barometerDetector;
 
     // ---- Building + floor map context ----
@@ -128,9 +129,7 @@ public class MainActivity extends AppCompatActivity {
         // Store instance for static access
         instance = this;
 
-        // Test simplified model (pure Java, no ML libraries)
-        Log.d("MainActivity", "Testing simplified activity model...");
-        testSimplifiedModel();
+
 
         // Request necessary permissions
         requestPermissions();
@@ -154,26 +153,7 @@ public class MainActivity extends AppCompatActivity {
         initMapContext();
     }
 
-    private void testSimplifiedModel() {
-        // Create dummy input: 50 timesteps x 69 features
-        float[][] dummyFeatures = new float[50][69];
-        for (int i = 0; i < 50; i++) {
-            for (int j = 0; j < 69; j++) {
-                dummyFeatures[i][j] = (float) (Math.random() * 2 - 1); // Random values between -1 and 1
-            }
-        }
 
-        // Run prediction
-        String result = SimplifiedActivityModel.predict(dummyFeatures);
-        String modelType = SimplifiedActivityModel.isTFLiteLoaded() ? "TFLite" : "Rule-based";
-        Log.d("MainActivity", String.format("✅ Model [%s] prediction: %s", modelType, result));
-        Toast.makeText(this, String.format("[%s] Activity: %s", modelType, result), Toast.LENGTH_SHORT).show();
-
-        // Test with confidence
-        SimplifiedActivityModel.PredictionResult detailedResult = SimplifiedActivityModel
-                .predictWithConfidence(dummyFeatures);
-        Log.d("MainActivity", "Detailed result: " + detailedResult.toString());
-    }
 
     private void requestPermissions() {
         String[] permissions = {
@@ -195,28 +175,18 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void initUI() {
-        // Use correct IDs from activity_main.xml
-        TextView tvStepCountDisplay = findViewById(R.id.step_count);
         tvState = findViewById(R.id.device_state);
-        tvThresholdValue = findViewById(R.id.threshold_value);
-        Button btnDecrease = findViewById(R.id.decrease_threshold);
-        btnResetSteps = findViewById(R.id.reset_steps);
-        Button btnIncrease = findViewById(R.id.increase_threshold);
 
-        // Store step count display for updates
-        tvStepCount = tvStepCountDisplay;
-
-        // ML Debug Panel
-        tvMlBufferStatus = findViewById(R.id.ml_buffer_status);
-        tvMlActivityPrediction = findViewById(R.id.ml_activity_prediction);
-        tvMlThresholdStatus = findViewById(R.id.ml_threshold_status);
-        tvMlLastUpdate = findViewById(R.id.ml_last_update);
-
-        // WiFi RSSI Panel
-        tvWifiApCount = findViewById(R.id.wifi_ap_count);
-        tvWifiVariance = findViewById(R.id.wifi_variance);
-        tvWifiStatus = findViewById(R.id.wifi_status);
-        tvWifiStrongestAp = findViewById(R.id.wifi_strongest_ap);
+        // Debug panel views are not present in the current layout — all null-guarded below.
+        btnResetSteps = null;
+        tvMlBufferStatus = null;
+        tvMlActivityPrediction = null;
+        tvMlThresholdStatus = null;
+        tvMlLastUpdate = null;
+        tvWifiApCount = null;
+        tvWifiVariance = null;
+        tvWifiStatus = null;
+        tvWifiStrongestAp = null;
 
         // Map View
         locationMapView = findViewById(R.id.location_map_view);
@@ -231,33 +201,6 @@ public class MainActivity extends AppCompatActivity {
         float currentThreshold = 1.5f;
         updateThresholdDisplay(currentThreshold);
 
-        // Decrease threshold button
-        if (btnDecrease != null) {
-            btnDecrease.setOnClickListener(v -> {
-                float newThreshold = getCurrentThreshold() - 0.05f;
-                if (newThreshold >= 0.9f) {
-                    setCurrentThreshold(newThreshold);
-                    updateThresholdDisplay(newThreshold);
-                    if (stepDetectionService != null) {
-                        stepDetectionService.setBinaryThreshold(newThreshold);
-                    }
-                }
-            });
-        }
-
-        // Increase threshold button
-        if (btnIncrease != null) {
-            btnIncrease.setOnClickListener(v -> {
-                float newThreshold = getCurrentThreshold() + 0.05f;
-                if (newThreshold <= 2.4f) {
-                    setCurrentThreshold(newThreshold);
-                    updateThresholdDisplay(newThreshold);
-                    if (stepDetectionService != null) {
-                        stepDetectionService.setBinaryThreshold(newThreshold);
-                    }
-                }
-            });
-        }
 
         // Setup threshold seekbar with null check
         if (thresholdSeekBar != null) {
@@ -295,27 +238,26 @@ public class MainActivity extends AppCompatActivity {
             });
         }
 
-        // Graph button with null check
-        if (btnStartGraph != null) {
-            btnStartGraph.setOnClickListener(v -> {
-                // Start GraphActivity for acceleration visualization
-                // Intent intent = new Intent(MainActivity.this, GraphActivity.class);
-                // startActivity(intent);
-            });
-        }
 
         // Map view button handlers (inside the FAB menu panel)
         btnClearPath = findViewById(R.id.btn_clear_path);
         btnCenterView = findViewById(R.id.btn_center_view);
 
         if (btnCenterView != null)
-            btnCenterView.setOnClickListener(v -> { if (locationMapView != null) locationMapView.centerView(); });
+            btnCenterView.setOnClickListener(v -> {
+                resetInactivityTimer();
+                if (locationMapView != null) locationMapView.centerView();
+            });
         if (btnClearPath != null)
-            btnClearPath.setOnClickListener(v -> { if (locationMapView != null) locationMapView.clearPath(); });
+            btnClearPath.setOnClickListener(v -> {
+                resetInactivityTimer();
+                if (locationMapView != null) locationMapView.clearPath();
+            });
 
         Button btnTogglePath = findViewById(R.id.btn_toggle_path);
         if (btnTogglePath != null) {
             btnTogglePath.setOnClickListener(v -> {
+                resetInactivityTimer();
                 if (locationMapView != null) {
                     boolean nowVisible = !locationMapView.isPathVisible();
                     locationMapView.setPathVisible(nowVisible);
@@ -339,6 +281,7 @@ public class MainActivity extends AppCompatActivity {
         Button btnEditMap = findViewById(R.id.btn_edit_map);
         if (btnEditMap != null) {
             btnEditMap.setOnClickListener(v -> {
+                resetInactivityTimer();
                 if (editMapPanel == null) return;
                 boolean open = editMapPanel.getVisibility() == View.VISIBLE;
                 if (open) {
@@ -362,22 +305,28 @@ public class MainActivity extends AppCompatActivity {
 
         Button btnSaveZone = findViewById(R.id.btn_save_zone);
         if (btnSaveZone != null)
-            btnSaveZone.setOnClickListener(v -> showSaveZoneDialog());
+            btnSaveZone.setOnClickListener(v -> { resetInactivityTimer(); showSaveZoneDialog(); });
 
         Button btnManageZones = findViewById(R.id.btn_manage_zones);
         if (btnManageZones != null)
-            btnManageZones.setOnClickListener(v -> showManageZonesDialog());
+            btnManageZones.setOnClickListener(v -> { resetInactivityTimer(); showManageZonesDialog(); });
 
         // Move Zone: pick a zone then drag it on the map
         Button btnMoveZone = findViewById(R.id.btn_move_zone);
         if (btnMoveZone != null) {
-            btnMoveZone.setOnClickListener(v -> showMoveZoneDialog());
+            btnMoveZone.setOnClickListener(v -> { resetInactivityTimer(); showMoveZoneDialog(); });
         }
 
         // Switch Floor: manual floor picker
         Button btnSwitchFloor = findViewById(R.id.btn_switch_floor);
         if (btnSwitchFloor != null) {
-            btnSwitchFloor.setOnClickListener(v -> showSwitchFloorDialog());
+            btnSwitchFloor.setOnClickListener(v -> { resetInactivityTimer(); showSwitchFloorDialog(); });
+        }
+
+        // Calibrate Floor: re-identify from barometer
+        Button btnCalibrateFloor = findViewById(R.id.btn_calibrate_floor);
+        if (btnCalibrateFloor != null) {
+            btnCalibrateFloor.setOnClickListener(v -> { resetInactivityTimer(); calibrateFloorFromBarometer(); });
         }
 
         // ---- Alerts button ----
@@ -385,10 +334,15 @@ public class MainActivity extends AppCompatActivity {
         if (btnAlerts != null)
             btnAlerts.setOnClickListener(v -> { showZoneAlertsDialog(); closeMenu(); });
 
+        // ---- Menu close (×) button ----
+        android.widget.ImageButton btnCloseMenu = findViewById(R.id.btn_close_menu);
+        if (btnCloseMenu != null) {
+            btnCloseMenu.setOnClickListener(v -> closeMenu());
+        }
+
         // Zone identification runs continuously
         startZoneIdentification();
 
-        // [REMOVABLE] Barometer floor detection
         initBarometerDetector();
     }
 
@@ -452,7 +406,7 @@ public class MainActivity extends AppCompatActivity {
                     android.widget.Toast.LENGTH_SHORT).show();
             return;
         }
-        // Sort floors by floor number (floors is a List<FloorRecord>)
+        // Sort floors by floor number
         java.util.List<FloorRecord> sorted = new java.util.ArrayList<>(currentBuilding.floors);
         sorted.sort(java.util.Comparator.comparingInt(f -> f.floorNumber));
 
@@ -474,21 +428,131 @@ public class MainActivity extends AppCompatActivity {
                             .apply();
                     Log.d("MapContext", "Manual floor switch → " + chosen);
                 })
+                .setNeutralButton("Delete Floor…", (d, w) -> showDeleteFloorDialog(sorted))
+                .setNegativeButton("Cancel", null)
                 .show();
     }
 
-    private void openMenu() {
-        if (menuPanel != null) { menuPanel.setVisibility(View.VISIBLE); menuOpen = true; }
-    }
-    private void closeMenu() {
-        if (menuPanel != null) { menuPanel.setVisibility(View.GONE); menuOpen = false; }
+    /** Let the user delete a non-active floor from the building record. */
+    private void showDeleteFloorDialog(java.util.List<FloorRecord> sorted) {
+        if (currentBuilding == null) return;
+        // Build labels, greying out the active floor (can't delete it)
+        String[] labels = sorted.stream()
+                .map(f -> BuildingMapRepository.floorLabel(f.floorNumber)
+                        + (f.floorNumber == currentMapFloor ? " (current — cannot delete)" : ""))
+                .toArray(String[]::new);
+
+        new android.app.AlertDialog.Builder(this)
+                .setTitle("Delete a Floor")
+                .setItems(labels, (d, which) -> {
+                    FloorRecord target = sorted.get(which);
+                    if (target.floorNumber == currentMapFloor) {
+                        android.widget.Toast.makeText(this,
+                                "Cannot delete the active floor. Switch floors first.",
+                                android.widget.Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+                    if (currentBuilding.floors.size() <= 1) {
+                        android.widget.Toast.makeText(this,
+                                "Cannot delete the only floor.",
+                                android.widget.Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+                    String label = BuildingMapRepository.floorLabel(target.floorNumber);
+                    new android.app.AlertDialog.Builder(this)
+                            .setTitle("Delete " + label + "?")
+                            .setMessage("This will permanently erase all zones and alerts on " + label + ".")
+                            .setPositiveButton("Delete", (d2, w2) -> {
+                                buildingMapRepo.deleteFloor(currentBuilding.id, target.floorNumber);
+                                // Reload building record
+                                currentBuilding = buildingMapRepo.findBySsid(currentBuilding.ssid);
+                                android.widget.Toast.makeText(this,
+                                        label + " deleted.", android.widget.Toast.LENGTH_SHORT).show();
+                                Log.d("MapContext", "Floor deleted: " + target.floorNumber);
+                            })
+                            .setNegativeButton("Cancel", null)
+                            .show();
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
     }
 
-    // =========================================================================
-    // [REMOVABLE] Barometer floor detection — completely isolated
-    // Remove: delete BarometerFloorDetector.java + this method + the field above
-    //         + this entire initBarometerDetector() call block
-    // =========================================================================
+    /**
+     * Re-identify floor from current barometer reading and switch if incorrect.
+     * Also triggers an immediate P0→P3 position snap.
+     */
+    private void calibrateFloorFromBarometer() {
+        if (barometerDetector == null || !barometerDetector.isAvailable()) {
+            android.widget.Toast.makeText(this,
+                    "Barometer unavailable on this device",
+                    android.widget.Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (currentBuilding == null) {
+            android.widget.Toast.makeText(this, "No building loaded",
+                    android.widget.Toast.LENGTH_SHORT).show();
+            return;
+        }
+        float pressure = barometerDetector.getLastSmoothed();
+        if (Float.isNaN(pressure)) {
+            android.widget.Toast.makeText(this,
+                    "No barometer reading yet — try again in a moment",
+                    android.widget.Toast.LENGTH_SHORT).show();
+            return;
+        }
+        int correctFloor = buildingMapRepo.identifyFloor(currentBuilding, pressure);
+        String floorLabel = BuildingMapRepository.floorLabel(correctFloor);
+        if (correctFloor != currentMapFloor) {
+            Log.d("MapContext", String.format(
+                    "Calibrate: pressure=%.3f hPa → floor %d (%s), was %d",
+                    pressure, correctFloor, floorLabel, currentMapFloor));
+            switchToFloor(correctFloor);
+            getSharedPreferences(PREF_MAP_CONTEXT, Context.MODE_PRIVATE)
+                    .edit().putInt(PREF_LAST_FLOOR, correctFloor).apply();
+            android.widget.Toast.makeText(this,
+                    "Floor corrected: " + floorLabel, android.widget.Toast.LENGTH_SHORT).show();
+        } else {
+            android.widget.Toast.makeText(this,
+                    "Floor already correct (" + floorLabel + ")",
+                    android.widget.Toast.LENGTH_SHORT).show();
+        }
+        // Always run position correction after a calibration
+        if (stepDetectionService != null) {
+            stepDetectionService.triggerStationaryCorrection();
+        }
+    }
+
+    private void openMenu() {
+        if (menuPanel != null) {
+            menuPanel.setVisibility(View.VISIBLE);
+            menuOpen = true;
+            resetInactivityTimer();
+        }
+    }
+    private void closeMenu() {
+        inactivityHandler.removeCallbacks(inactivityRunnable);
+        if (menuPanel != null) {
+            // Also collapse edit sub-panel
+            View editPanel = menuPanel.findViewById(R.id.edit_map_panel);
+            if (editPanel != null) editPanel.setVisibility(View.GONE);
+            Button btnEdit = menuPanel.findViewById(R.id.btn_edit_map);
+            if (btnEdit != null) {
+                btnEdit.setText("✏️ Edit Map");
+                btnEdit.setBackgroundTintList(
+                        android.content.res.ColorStateList.valueOf(0xFF1565C0));
+            }
+            exitEditMode();
+            menuPanel.setVisibility(View.GONE);
+            menuOpen = false;
+        }
+    }
+    /** Restart the 15-second inactivity countdown. Call this on every menu interaction. */
+    private void resetInactivityTimer() {
+        inactivityHandler.removeCallbacks(inactivityRunnable);
+        inactivityHandler.postDelayed(inactivityRunnable, INACTIVITY_TIMEOUT_MS);
+    }
+
+    // Barometer floor detection
     private void initBarometerDetector() {
         barometerDetector = new BarometerFloorDetector(this);
         if (!barometerDetector.isAvailable()) {
@@ -775,34 +839,17 @@ public class MainActivity extends AppCompatActivity {
 
             @Override
             public void onInitialPositionEstimated(float x, float y, int floor) {
-                runOnUiThread(() -> {
-                    if (tvPosition != null) {
-                        tvPosition.setText(String.format("Initial Position: (%.1f, %.1f) Floor: %d",
-                                x, y, floor));
-                    }
-                    Log("Initial position estimated from magnetic field");
-                });
+                Log(String.format("Initial position estimated: (%.1f, %.1f) Floor: %d", x, y, floor));
             }
 
             @Override
             public void onCalibrationNodeMatched(float x, float y, String nodeId) {
-                runOnUiThread(() -> {
-                    if (tvCalibration != null) {
-                        tvCalibration.setText(String.format("Calibration Node %s: (%.1f, %.1f)",
-                                nodeId, x, y));
-                    }
-                    Log("Calibration node matched - position corrected");
-                });
+                Log(String.format("Calibration node %s matched at (%.1f, %.1f)", nodeId, x, y));
             }
 
             @Override
             public void onMagneticDataCollected(float[] magneticVector) {
-                runOnUiThread(() -> {
-                    if (tvMagnetic != null) {
-                        tvMagnetic.setText(String.format("Magnetic: %.1f, %.1f, %.1f μT",
-                                magneticVector[0], magneticVector[1], magneticVector[2]));
-                    }
-                });
+                // Magnetic data collected — used internally by the service.
             }
 
             @Override
@@ -829,8 +876,6 @@ public class MainActivity extends AppCompatActivity {
                 currentPdrY = fusedPosition.y;
 
                 runOnUiThread(() -> {
-                    // Get heading from service if available, or assume 0 for now as it's not in
-                    // Position
                     float heading = 0.0f;
                     if (stepDetectionService != null) {
                         heading = stepDetectionService.getCurrentHeading();
@@ -881,27 +926,14 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void updateThresholdDisplay(float threshold) {
-        if (tvThresholdValue != null) {
-            tvThresholdValue.setText(String.format("Threshold: %.2f m/s²", threshold));
-        }
+        // No threshold display in current layout.
     }
 
     private void updateStepDisplay(int totalSteps, int sessionSteps, float stepLength) {
-        if (tvStepCount != null) {
-            tvStepCount.setText(String.format("Steps\nTotal: %d\nSession: %d", totalSteps, sessionSteps));
-        }
+        // No step count display in current layout.
     }
 
-    // Threshold management
-    private float currentThreshold = 1.5f;
 
-    private float getCurrentThreshold() {
-        return currentThreshold;
-    }
-
-    private void setCurrentThreshold(float threshold) {
-        this.currentThreshold = threshold;
-    }
 
     @Override
     protected void onResume() {
@@ -1231,36 +1263,79 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void showSetAlertDialog() {
-        List<ZoneMarker> markers = zoneRepo.getAll();
-        if (markers.isEmpty()) {
+        if (currentBuilding == null) {
+            new android.app.AlertDialog.Builder(this)
+                    .setTitle("No Building")
+                    .setMessage("No building loaded.")
+                    .setPositiveButton("OK", null).show();
+            return;
+        }
+
+        // Collect zones from ALL floors of the current building
+        // Each entry carries: display name, zone id, floor's alertRepo
+        java.util.List<String> allZoneNames = new java.util.ArrayList<>();
+        java.util.List<String> allZoneIds   = new java.util.ArrayList<>();
+        java.util.List<com.example.wytv2.zones.ZoneAlertRepository> allAlertRepos =
+                new java.util.ArrayList<>();
+
+        java.util.List<FloorRecord> floors = new java.util.ArrayList<>(currentBuilding.floors);
+        floors.sort(java.util.Comparator.comparingInt(f -> f.floorNumber));
+
+        for (FloorRecord fr : floors) {
+            String floorKey = BuildingMapRepository.alertKey(currentBuilding.id, fr.floorNumber);
+            String zoneKey  = BuildingMapRepository.zoneKey(currentBuilding.id, fr.floorNumber);
+            com.example.wytv2.zones.ZoneMarkerRepository floorZoneRepo =
+                    new com.example.wytv2.zones.ZoneMarkerRepository(this, zoneKey);
+            com.example.wytv2.zones.ZoneAlertRepository floorAlertRepo =
+                    new com.example.wytv2.zones.ZoneAlertRepository(this, floorKey);
+            String floorLabel = BuildingMapRepository.floorLabel(fr.floorNumber);
+            boolean isCurrentFloor = (fr.floorNumber == currentMapFloor);
+            for (com.example.wytv2.zones.ZoneMarker zm : floorZoneRepo.getAll()) {
+                allZoneNames.add(isCurrentFloor
+                        ? zm.name                                        // no prefix for current floor
+                        : "[" + floorLabel + "] " + zm.name);
+                allZoneIds.add(zm.id);
+                allAlertRepos.add(floorAlertRepo);
+                // store name for dialog label (used in the next step)
+            }
+        }
+
+        if (allZoneNames.isEmpty()) {
             new android.app.AlertDialog.Builder(this)
                     .setTitle("No Zones")
                     .setMessage("Save at least one zone first before creating an alert.")
                     .setPositiveButton("OK", null).show();
             return;
         }
-        String[] zoneNames = new String[markers.size()];
-        for (int i = 0; i < markers.size(); i++) zoneNames[i] = markers.get(i).name;
 
-        // Zone picker
+        String[] zoneNamesArr = allZoneNames.toArray(new String[0]);
         final int[] selected = {0};
         new android.app.AlertDialog.Builder(this)
                 .setTitle("🔔 Select Zone")
-                .setSingleChoiceItems(zoneNames, 0, (d, which) -> selected[0] = which)
+                .setSingleChoiceItems(zoneNamesArr, 0, (d, which) -> selected[0] = which)
                 .setPositiveButton("Next", (d, w) -> {
-                    ZoneMarker zone = markers.get(selected[0]);
+                    int idx = selected[0];
+                    String zoneName = allZoneNames.get(idx);
+                    String zoneId   = allZoneIds.get(idx);
+                    com.example.wytv2.zones.ZoneAlertRepository targetAlertRepo =
+                            allAlertRepos.get(idx);
                     // Message input
                     android.widget.EditText input = new android.widget.EditText(this);
                     input.setHint("Alert message…");
                     input.setInputType(android.text.InputType.TYPE_CLASS_TEXT);
                     new android.app.AlertDialog.Builder(this)
-                            .setTitle("🔔 Alert for: " + zone.name)
+                            .setTitle("🔔 Alert for: " + zoneName)
                             .setView(input)
                             .setPositiveButton("Save Alert", (d2, w2) -> {
                                 String msg = input.getText().toString().trim();
-                                if (msg.isEmpty()) msg = "You have entered " + zone.name;
-                                alertRepo.saveAlert(zone.id, zone.name, msg);
-                                Toast.makeText(this, "Alert set for " + zone.name, Toast.LENGTH_SHORT).show();
+                                if (msg.isEmpty()) msg = "You have entered " + zoneName;
+                                targetAlertRepo.saveAlert(zoneId, zoneName, msg);
+                                // Reload the field-level alertRepo so its in-memory cache
+                                // picks up the new alert (targetAlertRepo is a separate instance
+                                // that shares the same SharedPreferences key for the current floor).
+                                if (alertRepo != null) alertRepo.reload();
+                                Toast.makeText(this, "Alert set for " + zoneName,
+                                        Toast.LENGTH_SHORT).show();
                             })
                             .setNegativeButton("Cancel", null)
                             .show();

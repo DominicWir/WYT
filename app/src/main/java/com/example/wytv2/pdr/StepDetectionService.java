@@ -42,20 +42,21 @@ public class StepDetectionService implements SensorEventListener {
     private long lastStepTime = 0;
     private long lastStepDetectionTime = 0;
 
-    // Movement bout tracking — distinguishes brief device motion from sustained walking
-    private long movementBoutStartTime = 0;       // When did this movement bout begin?
-    private static final long BURST_THRESHOLD_MS = 2000;   // < 2s = device shake/short move
-    private static final long BOUT_RESET_MS = 3000;        // Reset bout if no step for 3s
-    private static final float BURST_STEP_LENGTH = 0.3f;   // Small displacement for short bursts
-    private static final float MAX_WALKING_STEP = 0.8f;    // Cap for sustained walking steps
+    // Movement bout tracking — distinguishes brief device motion from sustained
+    // walking
+    private long movementBoutStartTime = 0; // When did this movement bout begin?
+    private static final long BURST_THRESHOLD_MS = 2000; // < 2s = device shake/short move
+    private static final long BOUT_RESET_MS = 3000; // Reset bout if no step for 3s
+    private static final float BURST_STEP_LENGTH = 0.3f; // Small displacement for short bursts
+    private static final float MAX_WALKING_STEP = 0.8f; // Cap for sustained walking steps
 
     // Step cadence validation (filters hand shaking vs walking)
     // Walking is rhythmic; hand shaking is erratic.
     // Buffer step candidates and only count when cadence is consistent.
     private List<Long> stepCandidateTimestamps = new ArrayList<>();
     private boolean stepsValidated = false;
-    private static final int STEP_VALIDATION_COUNT = 3;    // Need 3 consistent steps (was 4)
-    private static final float MAX_CADENCE_CV = 0.50f;     // Max coefficient of variation (50%)
+    private static final int STEP_VALIDATION_COUNT = 3; // Need 3 consistent steps (was 4)
+    private static final float MAX_CADENCE_CV = 0.50f; // Max coefficient of variation (50%)
     private static final long STEP_CANDIDATE_TIMEOUT_MS = 5000; // Discard buffer after 5s gap (was 4s)
 
     // For step length calculation
@@ -69,9 +70,14 @@ public class StepDetectionService implements SensorEventListener {
     private List<Float> stationaryBuffer = new ArrayList<>();
     private static final int STATIONARY_BUFFER_SIZE = 50; // ~0.8s at 60Hz (was 80 = ~1.3s)
     private static final float STATIONARY_THRESHOLD = 0.12f;
-    /** When false (e.g. edit mode open) skip all stationary position corrections. */
+    /**
+     * When false (e.g. edit mode open) skip all stationary position corrections.
+     */
     private volatile boolean correctionEnabled = true;
-    public void setPositionCorrectionEnabled(boolean enabled) { correctionEnabled = enabled; }
+
+    public void setPositionCorrectionEnabled(boolean enabled) {
+        correctionEnabled = enabled;
+    }
 
     // Sustained movement gate — brief jostles (<1.5s) don't count as walking
     private long movingStartTime = 0;
@@ -82,23 +88,25 @@ public class StepDetectionService implements SensorEventListener {
     // Matching is done in SENSOR space (not drift-prone PDR space), so only genuine
     // physical revisits of a location trigger position correction.
     private static class SensorAnchor {
-        final Map<String, Integer> wifiRssi;   // BSSID → RSSI fingerprint
-        final float magMagnitude;               // |B| at this location (µT)
-        final float[] pdrPosition;              // PDR [x, y] when anchor was saved
+        final Map<String, Integer> wifiRssi; // BSSID → RSSI fingerprint
+        final float magMagnitude; // |B| at this location (µT)
+        final float[] pdrPosition; // PDR [x, y] when anchor was saved
 
         SensorAnchor(Map<String, Integer> wifi, float mag, float x, float y) {
             this.wifiRssi = wifi;
             this.magMagnitude = mag;
-            this.pdrPosition = new float[]{x, y};
+            this.pdrPosition = new float[] { x, y };
         }
     }
+
     private final List<SensorAnchor> sensorAnchors = new ArrayList<>();
     private static final int MAX_ANCHORS = 30;
     // Sensor similarity thresholds for anchor matching
-    private static final float ANCHOR_WIFI_SIM_THRESHOLD = 0.80f;  // cosine similarity (0-1)
-    private static final float ANCHOR_MAG_DIFF_THRESHOLD = 5.0f;   // µT tolerance
-    // Minimum physical separation: only save a new anchor if far enough from all existing ones
-    private static final float ANCHOR_PDR_MIN_SEPARATION = 1.0f;   // metres
+    private static final float ANCHOR_WIFI_SIM_THRESHOLD = 0.80f; // cosine similarity (0-1)
+    private static final float ANCHOR_MAG_DIFF_THRESHOLD = 5.0f; // µT tolerance
+    // Minimum physical separation: only save a new anchor if far enough from all
+    // existing ones
+    private static final float ANCHOR_PDR_MIN_SEPARATION = 1.0f; // metres
 
     // Zone positions for zone-constrained anchor correction.
     // Populated by MainActivity whenever zones are saved/deleted.
@@ -110,16 +118,23 @@ public class StepDetectionService implements SensorEventListener {
         zonePositions.addAll(positions);
     }
 
-    /** Returns the index of the nearest zone position to (x, y), or -1 if no zones defined. */
+    /**
+     * Returns the index of the nearest zone position to (x, y), or -1 if no zones
+     * defined.
+     */
     private int nearestZoneIndex(float x, float y) {
-        if (zonePositions.isEmpty()) return -1;
+        if (zonePositions.isEmpty())
+            return -1;
         int best = 0;
         float bestDist2 = Float.MAX_VALUE;
         for (int i = 0; i < zonePositions.size(); i++) {
             float dx = x - zonePositions.get(i)[0];
             float dy = y - zonePositions.get(i)[1];
             float d2 = dx * dx + dy * dy;
-            if (d2 < bestDist2) { bestDist2 = d2; best = i; }
+            if (d2 < bestDist2) {
+                bestDist2 = d2;
+                best = i;
+            }
         }
         return best;
     }
@@ -129,17 +144,18 @@ public class StepDetectionService implements SensorEventListener {
      * WiFi and magnetic snapshots. Called by MainActivity when user saves a zone.
      */
     public void addZoneAnchor(float x, float y) {
-        List<com.example.wytv2.wifi.WiFiReading> wifiReadings =
-                (wifiService != null) ? wifiService.getCurrentReadings() : null;
+        List<com.example.wytv2.wifi.WiFiReading> wifiReadings = (wifiService != null) ? wifiService.getCurrentReadings()
+                : null;
         Map<String, Integer> wifi = new HashMap<>();
         if (wifiReadings != null) {
             for (com.example.wytv2.wifi.WiFiReading r : wifiReadings)
                 wifi.put(r.bssid, r.rssi);
         }
         float mag = (latestMag != null) ? (float) Math.sqrt(
-                latestMag[0]*latestMag[0] + latestMag[1]*latestMag[1] + latestMag[2]*latestMag[2]) : 0f;
+                latestMag[0] * latestMag[0] + latestMag[1] * latestMag[1] + latestMag[2] * latestMag[2]) : 0f;
         sensorAnchors.add(new SensorAnchor(wifi, mag, x, y));
-        if (sensorAnchors.size() > MAX_ANCHORS) sensorAnchors.remove(0);
+        if (sensorAnchors.size() > MAX_ANCHORS)
+            sensorAnchors.remove(0);
         Log.d("StepDetection", String.format(
                 "Zone anchor added at (%.2f,%.2f) mag=%.1fµT wifi=%d APs [%d total]",
                 x, y, mag, wifi.size(), sensorAnchors.size()));
@@ -147,7 +163,8 @@ public class StepDetectionService implements SensorEventListener {
 
     /**
      * Reset the particle filter to the coordinate origin (0, 0).
-     * Called when switching to a new floor map — each floor has its own coordinate space.
+     * Called when switching to a new floor map — each floor has its own coordinate
+     * space.
      */
     public void resetToOrigin() {
         if (particleFilter != null && particleFilter.isInitialized()) {
@@ -158,7 +175,8 @@ public class StepDetectionService implements SensorEventListener {
     }
 
     /**
-     * Reset the particle filter to a known position (e.g. last zone before a floor transition).
+     * Reset the particle filter to a known position (e.g. last zone before a floor
+     * transition).
      * Lower spread (0.3f) since the position is authoritative.
      */
     public void resetToPosition(float x, float y) {
@@ -175,29 +193,30 @@ public class StepDetectionService implements SensorEventListener {
     // ---- Non-walking motion detector ----
     // Rapid direction changes (high jerk) = device shaking, not walking
     // Walking: ~2 sign reversals/sec; Shaking: 6+ per sec
-    private float lastLinearAcc = 0;               // Previous linearAcc derivative (for jerk tracking)
+    private float lastLinearAcc = 0; // Previous linearAcc derivative (for jerk tracking)
     private List<Long> signChangeTimestamps = new ArrayList<>(); // Times of sign changes
-    private static final float JERK_DEAD_BAND = 0.08f;  // Ignore tiny noise flips below this
-    private static final int SHAKE_CHANGE_THRESHOLD = 8;  // > 8 reversals in 1s = not walking (was 5, noise-prone)
-    private static final long SHAKE_WINDOW_MS = 1000;      // 1-second detection window
-    private boolean nonWalkingMotionBlocked = false;        // Blocks step detection when true
+    private static final float JERK_DEAD_BAND = 0.08f; // Ignore tiny noise flips below this
+    private static final int SHAKE_CHANGE_THRESHOLD = 8; // > 8 reversals in 1s = not walking (was 5, noise-prone)
+    private static final long SHAKE_WINDOW_MS = 1000; // 1-second detection window
+    private boolean nonWalkingMotionBlocked = false; // Blocks step detection when true
 
     // ---- Per-axis gravity tracking for swing detection ----
-    private float gravX = 0, gravY = 0, gravZ = 0;  // Low-pass filtered gravity per axis
+    private float gravX = 0, gravY = 0, gravZ = 0; // Low-pass filtered gravity per axis
     // α=0.95 → τ ≈ 330ms at 60Hz: correctly separates gravity from 1Hz arm swing
-    // α=0.80 → τ ≈  75ms at 60Hz: gravity absorbs arm swing (too fast — was the bug)
+    // α=0.80 → τ ≈ 75ms at 60Hz: gravity absorbs arm swing (too fast — was the bug)
     private static final float GRAVITY_ALPHA = 0.95f;
 
     // ---- Pendulum swing step detector ----
-    // Arm/leg swing during walking creates a sinusoidal oscillation on the dominant axis.
+    // Arm/leg swing during walking creates a sinusoidal oscillation on the dominant
+    // axis.
     // One peak of this oscillation = one step.
     private static final int SWING_BUF_CAPACITY = 30; // ~500ms of samples for variance computation
     private java.util.ArrayDeque<float[]> swingAxisBuffer = new java.util.ArrayDeque<>();
-    private int dominantAxis = 1;             // 0=X, 1=Y, 2=Z; updated dynamically
+    private int dominantAxis = 1; // 0=X, 1=Y, 2=Z; updated dynamically
     private long lastDomAxisUpdate = 0;
     private static final long DOM_AXIS_UPDATE_MS = 500; // Recompute dominant axis every 500ms
-    private float prevDomProj = 0;            // Previous sample on dominant axis
-    private float prevPrevDomProj = 0;        // Two samples back
+    private float prevDomProj = 0; // Previous sample on dominant axis
+    private float prevPrevDomProj = 0; // Two samples back
     private static final float SWING_PEAK_THRESHOLD = 0.3f; // Min peak amplitude to be a step (m/s²)
     // Magnetic field localization
     private MagneticFieldLocalizationService magneticService;
@@ -239,7 +258,8 @@ public class StepDetectionService implements SensorEventListener {
     private com.example.wytv2.localization.Position fusedPosition;
 
     // Stationary drift prevention
-    private long stationaryStartTime = 0;
+    private long stationaryStartTime = System.currentTimeMillis(); // Init to now so first onStartedMoving() doesn't see
+                                                                   // 29M-min duration
     private com.example.wytv2.localization.Position lastPositionBeforeStationary = null;
     private static final long STATIONARY_RESET_DELAY_MS = 10000; // 10 seconds
     private android.os.Handler driftPreventionHandler = new android.os.Handler();
@@ -382,13 +402,14 @@ public class StepDetectionService implements SensorEventListener {
                     savedThreshold, modelRetrainer.getCurrentAccuracy() * 100));
 
             // Set up listener to update threshold when retraining completes
-            modelRetrainer.setThresholdUpdateListener(new com.example.wytv2.ml.ModelRetrainer.ThresholdUpdateListener() {
-                @Override
-                public void onThresholdUpdated(float newThreshold, String reason) {
-                    binaryThreshold = newThreshold;
-                    Log.i("StepDetection", "Threshold updated: " + reason);
-                }
-            });
+            modelRetrainer
+                    .setThresholdUpdateListener(new com.example.wytv2.ml.ModelRetrainer.ThresholdUpdateListener() {
+                        @Override
+                        public void onThresholdUpdated(float newThreshold, String reason) {
+                            binaryThreshold = newThreshold;
+                            Log.i("StepDetection", "Threshold updated: " + reason);
+                        }
+                    });
 
             // Initialize Retraining Scheduler (prototype settings: every 50 steps)
             retrainingScheduler = new com.example.wytv2.ml.RetrainingScheduler(context, dataCollector);
@@ -615,7 +636,8 @@ public class StepDetectionService implements SensorEventListener {
     }
 
     public void start() {
-        // Primary: hardware step detector (manufacturer-tuned, filters non-walking motion)
+        // Primary: hardware step detector (manufacturer-tuned, filters non-walking
+        // motion)
         if (stepDetectorSensor != null) {
             sensorManager.registerListener(this, stepDetectorSensor, SensorManager.SENSOR_DELAY_NORMAL);
             Log.d("StepDetection", "Hardware step detector registered (primary step source)");
@@ -623,7 +645,8 @@ public class StepDetectionService implements SensorEventListener {
             Log.w("StepDetection", "Hardware step detector unavailable — falling back to swing detection");
         }
 
-        // Always register accelerometer for heading, stationary, and fallback swing detection
+        // Always register accelerometer for heading, stationary, and fallback swing
+        // detection
         sensorManager.registerListener(this, accelerometer, SensorManager.SENSOR_DELAY_UI);
         if (magnetometer != null) {
             sensorManager.registerListener(this, magnetometer, SensorManager.SENSOR_DELAY_UI);
@@ -730,12 +753,16 @@ public class StepDetectionService implements SensorEventListener {
         }
 
         // If hardware step detector is available, skip custom swing detection
-        // (hardware sensor is already handling steps via onSensorChanged TYPE_STEP_DETECTOR)
-        if (stepDetectorSensor != null) return;
+        // (hardware sensor is already handling steps via onSensorChanged
+        // TYPE_STEP_DETECTOR)
+        if (stepDetectorSensor != null)
+            return;
 
         // Fallback: swing-based step detection (only runs if no hardware step detector)
-        if (movingStartTime == 0) movingStartTime = timestamp;
-        if (timestamp - movingStartTime < MIN_MOVING_DURATION_MS) return;
+        if (movingStartTime == 0)
+            movingStartTime = timestamp;
+        if (timestamp - movingStartTime < MIN_MOVING_DURATION_MS)
+            return;
         detectSwingStep(linX, linY, linZ, linearAcc, timestamp);
     }
 
@@ -743,11 +770,12 @@ public class StepDetectionService implements SensorEventListener {
      * Pendulum swing step detector.
      * Walking (hand or pocket) creates sinusoidal oscillation on the dominant axis.
      * Each local maximum of the projection on that axis = one step.
-     * Uses gravity vector orientation to exclude the vertical axis from swing detection.
+     * Uses gravity vector orientation to exclude the vertical axis from swing
+     * detection.
      */
     private void detectSwingStep(float linX, float linY, float linZ, float linearAcc, long timestamp) {
         // Accumulate samples for variance computation
-        swingAxisBuffer.offer(new float[]{linX, linY, linZ});
+        swingAxisBuffer.offer(new float[] { linX, linY, linZ });
         if (swingAxisBuffer.size() > SWING_BUF_CAPACITY) {
             swingAxisBuffer.poll();
         }
@@ -755,26 +783,37 @@ public class StepDetectionService implements SensorEventListener {
         // Recompute dominant swing axis every 500ms
         if (swingAxisBuffer.size() >= 10 && (timestamp - lastDomAxisUpdate) > DOM_AXIS_UPDATE_MS) {
             // Step 1: Find the VERTICAL axis using gravity vector
-            // The axis with highest |gravity| component = vertical (mostly gravity, no swing signal)
+            // The axis with highest |gravity| component = vertical (mostly gravity, no
+            // swing signal)
             float absGX = Math.abs(gravX), absGY = Math.abs(gravY), absGZ = Math.abs(gravZ);
             int verticalAxis = 0;
             float maxGrav = absGX;
-            if (absGY > maxGrav) { maxGrav = absGY; verticalAxis = 1; }
-            if (absGZ > maxGrav) { verticalAxis = 2; }
+            if (absGY > maxGrav) {
+                maxGrav = absGY;
+                verticalAxis = 1;
+            }
+            if (absGZ > maxGrav) {
+                verticalAxis = 2;
+            }
 
-            // Step 2: The two remaining (horizontal) axes are candidates for swing detection
+            // Step 2: The two remaining (horizontal) axes are candidates for swing
+            // detection
             int h1 = (verticalAxis + 1) % 3;
             int h2 = (verticalAxis + 2) % 3;
 
             // Step 3: Pick the horizontal axis with higher variance = the swing axis
-            float[] mean = {0, 0, 0};
+            float[] mean = { 0, 0, 0 };
             for (float[] s : swingAxisBuffer) {
-                mean[0] += s[0]; mean[1] += s[1]; mean[2] += s[2];
+                mean[0] += s[0];
+                mean[1] += s[1];
+                mean[2] += s[2];
             }
             int n = swingAxisBuffer.size();
-            mean[0] /= n; mean[1] /= n; mean[2] /= n;
+            mean[0] /= n;
+            mean[1] /= n;
+            mean[2] /= n;
 
-            float[] var = {0, 0, 0};
+            float[] var = { 0, 0, 0 };
             for (float[] s : swingAxisBuffer) {
                 var[0] += (s[0] - mean[0]) * (s[0] - mean[0]);
                 var[1] += (s[1] - mean[1]) * (s[1] - mean[1]);
@@ -789,7 +828,7 @@ public class StepDetectionService implements SensorEventListener {
                 Log.d("StepDetection", String.format(
                         "Orientation: grav=[%.1f,%.1f,%.1f] vertAxis=%d swingAxis=%d var=[%.3f,%.3f,%.3f]",
                         gravX, gravY, gravZ, verticalAxis, dominantAxis,
-                        var[0]/n, var[1]/n, var[2]/n));
+                        var[0] / n, var[1] / n, var[2] / n));
             }
         }
 
@@ -1007,7 +1046,8 @@ public class StepDetectionService implements SensorEventListener {
                 onesCount++;
         }
 
-        // A step peak: some samples above threshold (not too few = noise, not all = sustained)
+        // A step peak: some samples above threshold (not too few = noise, not all =
+        // sustained)
         // Primary duplicate guard is MIN_STEP_INTERVAL, not this window check
         if (onesCount >= 2 && onesCount <= windowSize - 2) {
             if (hasValidPulsePattern(binary)) {
@@ -1228,12 +1268,14 @@ public class StepDetectionService implements SensorEventListener {
     }
 
     /**
-     * Check if step candidate timestamps show consistent cadence (rhythmic walking).
+     * Check if step candidate timestamps show consistent cadence (rhythmic
+     * walking).
      * Uses coefficient of variation (stdDev / mean) of inter-step intervals.
      * Walking typically has CV < 15-20%; hand shaking is much higher.
      */
     private boolean isCadenceConsistent(List<Long> timestamps) {
-        if (timestamps.size() < 2) return false;
+        if (timestamps.size() < 2)
+            return false;
 
         // Calculate inter-step intervals
         float[] intervals = new float[timestamps.size() - 1];
@@ -1296,247 +1338,19 @@ public class StepDetectionService implements SensorEventListener {
                             Log.d("StepDetection", String.format(
                                     "Saved position before stationary: (%.2f, %.2f)",
                                     lastPositionBeforeStationary.x, lastPositionBeforeStationary.y));
-
-                            float curX = lastPositionBeforeStationary.x;
-                            float curY = lastPositionBeforeStationary.y;
-
-                            // Snapshot WiFi + magnetic readings (used by both paths)
-                            List<com.example.wytv2.wifi.WiFiReading> wifiReadings =
-                                    (wifiService != null) ? wifiService.getCurrentReadings() : null;
-                            Map<String, Integer> curWifi = new java.util.HashMap<>();
-                            if (wifiReadings != null) {
-                                for (com.example.wytv2.wifi.WiFiReading r : wifiReadings)
-                                    curWifi.put(r.bssid, r.rssi);
-                            }
-                            float curMag = (float) Math.sqrt(
-                                    latestMag[0]*latestMag[0] +
-                                    latestMag[1]*latestMag[1] +
-                                    latestMag[2]*latestMag[2]);
-
-                            boolean corrected = false;
-
-                            // ================================================================
-                            // Precompute shared sensor snapshot used by all correction paths.
-                            // ================================================================
-                            float curMagForCorrection = curMag; // already computed above
-
-                            // ================================================================
-                            // PRIORITY 0: Zone-fingerprint snap (any distance)
-                            // Match live WiFi+mag against ALL saved SensorAnchors.
-                            // If the best-matching anchor's stored position is within
-                            // ZONE_ANCHOR_PROMOTE_M of any zone center, snap to that zone.
-                            // This fires regardless of how far the PDR position has drifted —
-                            // fixing the "stuck far from zones" problem.
-                            // ================================================================
-                            final float ZONE_ANCHOR_PROMOTE_M = 3.0f; // anchor→zone promotion radius
-                            final float P0_MIN_WIFI_SIM      = 0.85f; // stricter threshold for P0
-                            if (!zonePositions.isEmpty() && !sensorAnchors.isEmpty()
-                                    && !curWifi.isEmpty()) {
-                                SensorAnchor p0Best = null;
-                                float p0BestSim   = 0;
-                                int   p0ZoneIdx   = -1;
-                                for (SensorAnchor anchor : sensorAnchors) {
-                                    float magDiff = Math.abs(curMagForCorrection - anchor.magMagnitude);
-                                    if (magDiff > ANCHOR_MAG_DIFF_THRESHOLD) continue;
-                                    float dot = 0, normA = 0, normB = 0;
-                                    for (Map.Entry<String, Integer> e : curWifi.entrySet()) {
-                                        int rssiA = e.getValue();
-                                        Integer rssiB = anchor.wifiRssi.get(e.getKey());
-                                        if (rssiB != null) {
-                                            dot += rssiA * rssiB;
-                                            normA += rssiA * rssiA;
-                                            normB += rssiB * rssiB;
-                                        }
-                                    }
-                                    if (normA <= 0 || normB <= 0) continue;
-                                    float sim = dot / (float)(Math.sqrt(normA) * Math.sqrt(normB));
-                                    if (sim < P0_MIN_WIFI_SIM) continue;
-                                    // Check if this anchor is near any zone
-                                    float ax = anchor.pdrPosition[0], ay = anchor.pdrPosition[1];
-                                    for (int zi = 0; zi < zonePositions.size(); zi++) {
-                                        float[] zp2 = zonePositions.get(zi);
-                                        float d2z = (float) Math.sqrt(
-                                                Math.pow(ax - zp2[0], 2) + Math.pow(ay - zp2[1], 2));
-                                        if (d2z <= ZONE_ANCHOR_PROMOTE_M && sim > p0BestSim) {
-                                            p0BestSim = sim;
-                                            p0Best    = anchor;
-                                            p0ZoneIdx = zi;
-                                        }
-                                    }
-                                }
-                                if (p0Best != null && p0ZoneIdx >= 0) {
-                                    // Zone-constraint guard for P0
-                                    int curZoneP0    = nearestZoneIndex(curX, curY);
-                                    int anchorZoneP0 = nearestZoneIndex(
-                                            p0Best.pdrPosition[0], p0Best.pdrPosition[1]);
-                                    boolean sameZoneP0 = (zonePositions.size() == 1)
-                                            || (curZoneP0 == anchorZoneP0);
-                                    if (sameZoneP0) {
-                                        float[] snapZone = zonePositions.get(p0ZoneIdx);
-                                        Log.d("StepDetection", String.format(
-                                                "P0 Zone-fingerprint SNAP: wifiSim=%.2f → zone %d (%.2f,%.2f) [drift=%.1fm]",
-                                                p0BestSim, p0ZoneIdx, snapZone[0], snapZone[1],
-                                                (float) Math.sqrt(Math.pow(curX - snapZone[0], 2)
-                                                        + Math.pow(curY - snapZone[1], 2))));
-                                        particleFilter.initialize(
-                                                new Position(snapZone[0], snapZone[1], 0),
-                                                500, currentHeading, 0.3f);
-                                        corrected = true;
-                                    } else {
-                                        Log.d("StepDetection", String.format(
-                                                "P0 suppressed: curZone=%d anchorZone=%d",
-                                                curZoneP0, anchorZoneP0));
-                                    }
-                                }
-                            }
-
-                            // ================================================================
-                            // PRIORITY 1: Zone-center snap (PDR within 5m of a zone)
-                            // ================================================================
-                            if (!corrected && !zonePositions.isEmpty()) {
-                                int nearestZoneIdx = nearestZoneIndex(curX, curY);
-                                float[] zp = zonePositions.get(nearestZoneIdx);
-                                float zdx = curX - zp[0], zdy = curY - zp[1];
-                                float distToZone = (float) Math.sqrt(zdx * zdx + zdy * zdy);
-
-                                if (distToZone <= 5.0f) {
-                                    Log.d("StepDetection", String.format(
-                                            "P1 Zone-center SNAP: %.1fm from zone %d → (%.2f,%.2f)",
-                                            distToZone, nearestZoneIdx, zp[0], zp[1]));
-                                    particleFilter.initialize(
-                                            new Position(zp[0], zp[1], 0),
-                                            500, currentHeading, 0.3f);
-                                    corrected = true;
-                                }
-                            }
-
-                            // ================================================================
-                            // PRIORITY 2: Dynamic-anchor fingerprint snap (unzoned areas)
-                            // If the matched anchor is within ZONE_ANCHOR_PROMOTE_M of a zone,
-                            // promote the snap target to that zone center rather than the raw
-                            // anchor coordinates (prevents drifted anchors from propagating).
-                            // ================================================================
-                            if (!corrected) {
-                                SensorAnchor bestMatch = null;
-                                float bestSim = 0;
-                                for (SensorAnchor anchor : sensorAnchors) {
-                                    float magDiff = Math.abs(curMagForCorrection - anchor.magMagnitude);
-                                    if (magDiff > ANCHOR_MAG_DIFF_THRESHOLD) continue;
-                                    if (!curWifi.isEmpty() && !anchor.wifiRssi.isEmpty()) {
-                                        float dot = 0, normA = 0, normB = 0;
-                                        for (Map.Entry<String, Integer> e : curWifi.entrySet()) {
-                                            int rssiA = e.getValue();
-                                            Integer rssiB = anchor.wifiRssi.get(e.getKey());
-                                            if (rssiB != null) {
-                                                dot  += rssiA * rssiB;
-                                                normA += rssiA * rssiA;
-                                                normB += rssiB * rssiB;
-                                            }
-                                        }
-                                        if (normA > 0 && normB > 0) {
-                                            float sim = dot / (float)(Math.sqrt(normA) * Math.sqrt(normB));
-                                            if (sim > ANCHOR_WIFI_SIM_THRESHOLD && sim > bestSim) {
-                                                bestSim = sim;
-                                                bestMatch = anchor;
-                                            }
-                                        }
-                                    } else if (curWifi.isEmpty()) {
-                                        float magDiff2 = Math.abs(curMagForCorrection - anchor.magMagnitude);
-                                        float sim = 1.0f - (magDiff2 / ANCHOR_MAG_DIFF_THRESHOLD);
-                                        if (sim > bestSim) { bestSim = sim; bestMatch = anchor; }
-                                    }
-                                }
-
-                                if (bestMatch != null) {
-                                    int curZone    = nearestZoneIndex(curX, curY);
-                                    int anchorZone = nearestZoneIndex(
-                                            bestMatch.pdrPosition[0], bestMatch.pdrPosition[1]);
-                                    boolean sameZone = zonePositions.isEmpty()
-                                            || (curZone == anchorZone);
-                                    if (!sameZone) {
-                                        Log.d("StepDetection", String.format(
-                                                "P2 anchor suppressed: zone %d ≠ %d", curZone, anchorZone));
-                                    } else {
-                                        // Promote to zone center if anchor is near one
-                                        float ax2 = bestMatch.pdrPosition[0];
-                                        float ay2 = bestMatch.pdrPosition[1];
-                                        Position snapPos = new Position(ax2, ay2, 0);
-                                        if (!zonePositions.isEmpty()) {
-                                            for (float[] zp3 : zonePositions) {
-                                                float d2z = (float) Math.sqrt(
-                                                        Math.pow(ax2 - zp3[0], 2) + Math.pow(ay2 - zp3[1], 2));
-                                                if (d2z <= ZONE_ANCHOR_PROMOTE_M) {
-                                                    snapPos = new Position(zp3[0], zp3[1], 0);
-                                                    Log.d("StepDetection", String.format(
-                                                            "P2 promoted anchor→zone center (%.2f,%.2f)",
-                                                            zp3[0], zp3[1]));
-                                                    break;
-                                                }
-                                            }
-                                        }
-                                        float drift = (float) Math.sqrt(
-                                                Math.pow(curX - snapPos.x, 2) + Math.pow(curY - snapPos.y, 2));
-                                        Log.d("StepDetection", String.format(
-                                                "P2 Fingerprint SNAP: wifiSim=%.2f magDiff=%.1fµT drift=%.2fm → (%.2f,%.2f)",
-                                                bestSim, Math.abs(curMagForCorrection - bestMatch.magMagnitude),
-                                                drift, snapPos.x, snapPos.y));
-                                        particleFilter.initialize(snapPos, 500, currentHeading, 0.3f);
-                                        corrected = true;
-                                    }
-                                }
-
-                                // Save dynamic anchor only in unzoned space (>5m from all zones)
-                                if (!corrected || bestMatch == null) {
-                                    boolean inZonedArea = false;
-                                    for (float[] zp4 : zonePositions) {
-                                        float d = (float) Math.sqrt(
-                                                Math.pow(curX - zp4[0], 2) + Math.pow(curY - zp4[1], 2));
-                                        if (d <= 5.0f) { inZonedArea = true; break; }
-                                    }
-                                    if (!inZonedArea) {
-                                        boolean tooClose = false;
-                                        for (SensorAnchor anc : sensorAnchors) {
-                                            float dx2 = curX - anc.pdrPosition[0];
-                                            float dy2 = curY - anc.pdrPosition[1];
-                                            if (Math.sqrt(dx2 * dx2 + dy2 * dy2) < ANCHOR_PDR_MIN_SEPARATION) {
-                                                tooClose = true; break;
-                                            }
-                                        }
-                                        if (!tooClose) {
-                                            sensorAnchors.add(new SensorAnchor(curWifi, curMagForCorrection, curX, curY));
-                                            if (sensorAnchors.size() > MAX_ANCHORS) sensorAnchors.remove(0);
-                                            Log.d("StepDetection", String.format(
-                                                    "Dynamic anchor saved: (%.2f,%.2f) mag=%.1fµT wifi=%d APs [%d total]",
-                                                    curX, curY, curMagForCorrection, curWifi.size(), sensorAnchors.size()));
-                                        }
-                                    }
-                                }
-                                // ============================================================
-                                // PRIORITY 3: Nearest-zone fallback (no threshold)
-                                // If P0/P1/P2 all failed and zones exist, snap to the
-                                // geometrically nearest zone. This guarantees recovery when
-                                // fingerprint data is absent or stale.
-                                // ============================================================
-                                if (!corrected && !zonePositions.isEmpty()) {
-                                    int nearestIdx = nearestZoneIndex(curX, curY);
-                                    float[] zp = zonePositions.get(nearestIdx);
-                                    float dNearest = (float) Math.sqrt(
-                                            Math.pow(curX - zp[0], 2) + Math.pow(curY - zp[1], 2));
-                                    Log.d("StepDetection", String.format(
-                                            "P3 Nearest-zone SNAP: zone %d at %.1fm → (%.2f,%.2f)",
-                                            nearestIdx, dNearest, zp[0], zp[1]));
-                                    particleFilter.initialize(
-                                            new Position(zp[0], zp[1], 0),
-                                            500, currentHeading, 0.5f);
-                                }
-                            }
+                            runPositionCorrection(
+                                    lastPositionBeforeStationary.x,
+                                    lastPositionBeforeStationary.y);
                         }
                     }
                     driftPreventionHandler.postDelayed(this::checkAndPreventDrift, 5000);
                 } else {
-                    // Just started moving - clear saved position and stop drift prevention
+                    // Just started moving - clear saved position and stop drift prevention.
+                    // NOTE: Do NOT zero stationaryStartTime here; onStartedMoving() reads
+                    // it in the same call stack (processAccelerometer → updateStationaryDetection
+                    // → onStartedMoving). Zeroing it here would make onStartedMoving() compute
+                    // a billion-millisecond duration and falsely reset the session.
                     lastPositionBeforeStationary = null;
-                    stationaryStartTime = 0;
                     driftPreventionResetPerformed = false; // Reset flag for next stationary period
                     driftPreventionHandler.removeCallbacks(this::checkAndPreventDrift);
                 }
@@ -1620,22 +1434,236 @@ public class StepDetectionService implements SensorEventListener {
          * }
          */
     }
+    // =========================================================================
+    // Position correction (P0→P3) — shared by stationary detection + manual
+    // calibration
+    // =========================================================================
+
+    /**
+     * Run the priority-ordered position-correction chain (P0→P3) from the given
+     * PDR coordinate, then notify all registered listeners with the result.
+     */
+    private void runPositionCorrection(float curX, float curY) {
+        if (particleFilter == null || !particleFilter.isInitialized())
+            return;
+
+        // Snapshot WiFi + magnetic readings
+        List<com.example.wytv2.wifi.WiFiReading> wifiReadings = (wifiService != null) ? wifiService.getCurrentReadings()
+                : null;
+        Map<String, Integer> curWifi = new java.util.HashMap<>();
+        if (wifiReadings != null) {
+            for (com.example.wytv2.wifi.WiFiReading r : wifiReadings)
+                curWifi.put(r.bssid, r.rssi);
+        }
+        float curMag = (float) Math.sqrt(
+                latestMag[0] * latestMag[0] +
+                        latestMag[1] * latestMag[1] +
+                        latestMag[2] * latestMag[2]);
+
+        boolean corrected = false;
+        final float ZONE_ANCHOR_PROMOTE_M = 3.0f;
+        final float P0_MIN_WIFI_SIM = 0.85f;
+
+        // ---- P0: Zone-fingerprint snap ----
+        if (!zonePositions.isEmpty() && !sensorAnchors.isEmpty() && !curWifi.isEmpty()) {
+            SensorAnchor p0Best = null;
+            float p0BestSim = 0;
+            int p0ZoneIdx = -1;
+            for (SensorAnchor anchor : sensorAnchors) {
+                float magDiff = Math.abs(curMag - anchor.magMagnitude);
+                if (magDiff > ANCHOR_MAG_DIFF_THRESHOLD)
+                    continue;
+                float dot = 0, normA = 0, normB = 0;
+                for (Map.Entry<String, Integer> e : curWifi.entrySet()) {
+                    int rssiA = e.getValue();
+                    Integer rssiB = anchor.wifiRssi.get(e.getKey());
+                    if (rssiB != null) {
+                        dot += rssiA * rssiB;
+                        normA += rssiA * rssiA;
+                        normB += rssiB * rssiB;
+                    }
+                }
+                if (normA <= 0 || normB <= 0)
+                    continue;
+                float sim = dot / (float) (Math.sqrt(normA) * Math.sqrt(normB));
+                if (sim < P0_MIN_WIFI_SIM)
+                    continue;
+                float ax = anchor.pdrPosition[0], ay = anchor.pdrPosition[1];
+                for (int zi = 0; zi < zonePositions.size(); zi++) {
+                    float[] zp2 = zonePositions.get(zi);
+                    float d2z = (float) Math.sqrt(Math.pow(ax - zp2[0], 2) + Math.pow(ay - zp2[1], 2));
+                    if (d2z <= ZONE_ANCHOR_PROMOTE_M && sim > p0BestSim) {
+                        p0BestSim = sim;
+                        p0Best = anchor;
+                        p0ZoneIdx = zi;
+                    }
+                }
+            }
+            if (p0Best != null && p0ZoneIdx >= 0) {
+                int cz = nearestZoneIndex(curX, curY);
+                int az = nearestZoneIndex(p0Best.pdrPosition[0], p0Best.pdrPosition[1]);
+                if (zonePositions.size() == 1 || cz == az) {
+                    float[] sz = zonePositions.get(p0ZoneIdx);
+                    Log.d("StepDetection",
+                            String.format("P0 SNAP: sim=%.2f zone%d (%.2f,%.2f)", p0BestSim, p0ZoneIdx, sz[0], sz[1]));
+                    particleFilter.initialize(new Position(sz[0], sz[1], 0), 500, currentHeading, 0.3f);
+                    corrected = true;
+                }
+            }
+        }
+
+        // ---- P1: Zone-center snap (within 5m) ----
+        if (!corrected && !zonePositions.isEmpty()) {
+            int nzi = nearestZoneIndex(curX, curY);
+            float[] zp = zonePositions.get(nzi);
+            float dist = (float) Math.sqrt(Math.pow(curX - zp[0], 2) + Math.pow(curY - zp[1], 2));
+            if (dist <= 5.0f) {
+                Log.d("StepDetection", String.format("P1 SNAP: %.1fm zone%d (%.2f,%.2f)", dist, nzi, zp[0], zp[1]));
+                particleFilter.initialize(new Position(zp[0], zp[1], 0), 500, currentHeading, 0.3f);
+                corrected = true;
+            }
+        }
+
+        // ---- P2: Dynamic anchor fingerprint snap ----
+        if (!corrected) {
+            SensorAnchor bestMatch = null;
+            float bestSim = 0;
+            for (SensorAnchor anchor : sensorAnchors) {
+                float magDiff = Math.abs(curMag - anchor.magMagnitude);
+                if (magDiff > ANCHOR_MAG_DIFF_THRESHOLD)
+                    continue;
+                if (!curWifi.isEmpty() && !anchor.wifiRssi.isEmpty()) {
+                    float dot = 0, normA = 0, normB = 0;
+                    for (Map.Entry<String, Integer> e : curWifi.entrySet()) {
+                        int rssiA = e.getValue();
+                        Integer rssiB = anchor.wifiRssi.get(e.getKey());
+                        if (rssiB != null) {
+                            dot += rssiA * rssiB;
+                            normA += rssiA * rssiA;
+                            normB += rssiB * rssiB;
+                        }
+                    }
+                    if (normA > 0 && normB > 0) {
+                        float sim = dot / (float) (Math.sqrt(normA) * Math.sqrt(normB));
+                        if (sim > ANCHOR_WIFI_SIM_THRESHOLD && sim > bestSim) {
+                            bestSim = sim;
+                            bestMatch = anchor;
+                        }
+                    }
+                } else if (curWifi.isEmpty()) {
+                    float sim = 1.0f - (Math.abs(curMag - anchor.magMagnitude) / ANCHOR_MAG_DIFF_THRESHOLD);
+                    if (sim > bestSim) {
+                        bestSim = sim;
+                        bestMatch = anchor;
+                    }
+                }
+            }
+            if (bestMatch != null) {
+                int cz = nearestZoneIndex(curX, curY);
+                int az = nearestZoneIndex(bestMatch.pdrPosition[0], bestMatch.pdrPosition[1]);
+                if (zonePositions.isEmpty() || cz == az) {
+                    float ax2 = bestMatch.pdrPosition[0], ay2 = bestMatch.pdrPosition[1];
+                    Position snapPos = new Position(ax2, ay2, 0);
+                    for (float[] zp3 : zonePositions) {
+                        if ((float) Math
+                                .sqrt(Math.pow(ax2 - zp3[0], 2) + Math.pow(ay2 - zp3[1], 2)) <= ZONE_ANCHOR_PROMOTE_M) {
+                            snapPos = new Position(zp3[0], zp3[1], 0);
+                            break;
+                        }
+                    }
+                    Log.d("StepDetection",
+                            String.format("P2 SNAP: sim=%.2f → (%.2f,%.2f)", bestSim, snapPos.x, snapPos.y));
+                    particleFilter.initialize(snapPos, 500, currentHeading, 0.3f);
+                    corrected = true;
+                }
+            }
+            // Save dynamic anchor in unzoned space
+            if (!corrected || bestMatch == null) {
+                boolean inZone = false;
+                for (float[] zp4 : zonePositions) {
+                    if (Math.sqrt(Math.pow(curX - zp4[0], 2) + Math.pow(curY - zp4[1], 2)) <= 5.0f) {
+                        inZone = true;
+                        break;
+                    }
+                }
+                if (!inZone) {
+                    boolean tooClose = false;
+                    for (SensorAnchor anc : sensorAnchors) {
+                        float dx = curX - anc.pdrPosition[0], dy = curY - anc.pdrPosition[1];
+                        if (Math.sqrt(dx * dx + dy * dy) < ANCHOR_PDR_MIN_SEPARATION) {
+                            tooClose = true;
+                            break;
+                        }
+                    }
+                    if (!tooClose) {
+                        sensorAnchors.add(new SensorAnchor(curWifi, curMag, curX, curY));
+                        if (sensorAnchors.size() > MAX_ANCHORS)
+                            sensorAnchors.remove(0);
+                        Log.d("StepDetection",
+                                String.format("Anchor saved (%.2f,%.2f) [%d]", curX, curY, sensorAnchors.size()));
+                    }
+                }
+            }
+            // ---- P3: Nearest-zone fallback ----
+            if (!corrected && !zonePositions.isEmpty()) {
+                int ni = nearestZoneIndex(curX, curY);
+                float[] zp = zonePositions.get(ni);
+                Log.d("StepDetection", String.format("P3 SNAP: zone%d (%.2f,%.2f)", ni, zp[0], zp[1]));
+                particleFilter.initialize(new Position(zp[0], zp[1], 0), 500, currentHeading, 0.5f);
+                corrected = true;
+            }
+        }
+
+        // Notify listeners
+        fusedPosition = particleFilter.getEstimatedPosition();
+        if (fusedPosition != null) {
+            for (DeviceStateListener l : listeners)
+                l.onPositionUpdated(fusedPosition);
+            Log.d("StepDetection", String.format("Correction done: (%.2f,%.2f) corrected=%b", fusedPosition.x,
+                    fusedPosition.y, corrected));
+        }
+    }
+
+    /**
+     * Manually trigger the P0→P3 position-correction chain on demand.
+     * Safe to call from any thread. Uses current particle-filter estimate as
+     * origin.
+     * Intended for use by the Calibrate Floor button in MainActivity.
+     */
+    public void triggerStationaryCorrection() {
+        if (particleFilter == null || !particleFilter.isInitialized()) {
+            Log.w("StepDetection", "triggerStationaryCorrection: filter not ready");
+            return;
+        }
+        com.example.wytv2.localization.Position cur = particleFilter.getEstimatedPosition();
+        if (cur == null) {
+            Log.w("StepDetection", "triggerStationaryCorrection: no position");
+            return;
+        }
+        Log.d("StepDetection", String.format("Manual snap from (%.2f,%.2f)", cur.x, cur.y));
+        runPositionCorrection(cur.x, cur.y);
+    }
 
     private void onStartedMoving() {
-        long stationaryDuration = System.currentTimeMillis() - stationaryStartTime;
-
-        // Only reset session steps if stationary for more than 5 minutes
-        // This preserves step count during brief pauses (e.g., looking at phone)
-        if (stationaryDuration > 300000) { // 5 minutes in milliseconds
-            Log.d("StepDetection", String.format(
-                    "Started moving after long stationary period (%.1f min) - resetting session",
-                    stationaryDuration / 60000.0));
-            sessionStepCount = 0;
-        } else {
-            Log.d("StepDetection", String.format(
-                    "Started moving after brief pause (%.1f sec) - keeping session steps (%d)",
-                    stationaryDuration / 1000.0, sessionStepCount));
+        // Only reset session steps if we have a valid stationaryStartTime (> 0) AND
+        // the device was actually stationary for more than 5 minutes.
+        // Guard prevents a race: stationaryStartTime=0 at field init would produce a
+        // billions-of-ms duration on the very first movement, falsely resetting the
+        // session.
+        if (stationaryStartTime > 0) {
+            long stationaryDuration = System.currentTimeMillis() - stationaryStartTime;
+            if (stationaryDuration > 300000) { // 5 minutes in milliseconds
+                Log.d("StepDetection", String.format(
+                        "Started moving after long stationary period (%.1f min) - resetting session",
+                        stationaryDuration / 60000.0));
+                sessionStepCount = 0;
+            } else {
+                Log.d("StepDetection", String.format(
+                        "Started moving after brief pause (%.1f sec) - keeping session steps (%d)",
+                        stationaryDuration / 1000.0, sessionStepCount));
+            }
         }
+        stationaryStartTime = 0; // Reset here, after reading, not before
 
         hasInitialPosition = false;
         initialPosition = null;
@@ -1764,8 +1792,7 @@ public class StepDetectionService implements SensorEventListener {
             wifiPositioningModel.addSensorReading(latestAccel, latestGyro, latestMag);
 
             // Try to get a position prediction
-            com.example.wytv2.ml.WiFiPositioningModel.PositionPrediction mlPos =
-                    wifiPositioningModel.predict();
+            com.example.wytv2.ml.WiFiPositioningModel.PositionPrediction mlPos = wifiPositioningModel.predict();
             if (mlPos != null) {
                 if (mlPos.hasDelta && particleFilter != null && particleFilter.isInitialized()) {
                     // Apply relative displacement as drift correction
@@ -1839,7 +1866,7 @@ public class StepDetectionService implements SensorEventListener {
                 result.probabilities[0], result.probabilities[1], result.probabilities[2],
                 result.probabilities[3], result.probabilities[4],
                 binaryThreshold,
-                SimplifiedActivityModel.isTFLiteLoaded() ? "TFLite" : "Rules"));
+                SimplifiedActivityModel.isOnnxModelLoaded() ? "ONNX" : "Rules"));
 
         // Notify listener
         for (DeviceStateListener listener : listeners) {

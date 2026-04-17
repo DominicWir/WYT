@@ -106,6 +106,32 @@ public class BuildingMapRepository {
     }
 
     /**
+     * Delete a floor record from a building and erase its stored zone + alert data.
+     * Does nothing if the floor does not exist in the building.
+     *
+     * @param buildingId  sanitized building id
+     * @param floorNumber the floor to remove
+     * @return true if the floor was found and deleted
+     */
+    public synchronized boolean deleteFloor(String buildingId, int floorNumber) {
+        for (BuildingMap b : cache) {
+            if (b.id.equals(buildingId)) {
+                boolean removed = b.floors.removeIf(f -> f.floorNumber == floorNumber);
+                if (removed) {
+                    // Erase zone + alert data stored under the per-floor keys
+                    context.getSharedPreferences(zoneKey(buildingId, floorNumber),
+                            Context.MODE_PRIVATE).edit().clear().apply();
+                    context.getSharedPreferences(alertKey(buildingId, floorNumber),
+                            Context.MODE_PRIVATE).edit().clear().apply();
+                    persist();
+                }
+                return removed;
+            }
+        }
+        return false;
+    }
+
+    /**
      * Given the current barometer pressure, return the floor number whose
      * reference pressure is closest. Falls back to 0 if no records present.
      */

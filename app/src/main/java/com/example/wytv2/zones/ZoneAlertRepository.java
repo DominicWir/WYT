@@ -97,6 +97,15 @@ public class ZoneAlertRepository {
         persist();
     }
 
+    /**
+     * Re-reads alerts from SharedPreferences into the in-memory cache.
+     * Call this on the field-level instance after a separate repository instance
+     * (e.g., one created inside a dialog) has written new alerts to the same prefs key.
+     */
+    public synchronized void reload() {
+        load();
+    }
+
     // ---- JSON persistence ---------------------------------------------------
 
     private void load() {

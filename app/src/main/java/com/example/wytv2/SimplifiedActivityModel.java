@@ -3,17 +3,17 @@ package com.example.wytv2;
 import android.content.Context;
 import android.util.Log;
 
-import com.example.wytv2.ml.TFLiteActivityModel;
+import com.example.wytv2.ml.OnnxActivityModel;
 
 import java.io.File;
 
 /**
  * Activity recognition model wrapper.
- * 
- * Delegates to TFLiteActivityModel for inference when a .tflite model is
- * available,
- * falling back to rule-based classification otherwise.
- * 
+ *
+ * Delegates to {@link com.example.wytv2.ml.OnnxActivityModel} for inference
+ * when the ONNX model (activity_model.onnx) is available, falling back to
+ * rule-based classification otherwise.
+ *
  * Also manages model persistence (save/load retrained models) via
  * ModelFileManager.
  */
@@ -21,7 +21,7 @@ public class SimplifiedActivityModel {
     private static final String TAG = "SimplifiedActivityModel";
 
     private static com.example.wytv2.ml.ModelFileManager modelFileManager;
-    private static TFLiteActivityModel tfliteModel;
+    private static OnnxActivityModel onnxModel;
     private static boolean isInitialized = false;
 
     private static final String[] ACTIVITIES = {
@@ -33,9 +33,9 @@ public class SimplifiedActivityModel {
     };
 
     /**
-     * Initialize model with TFLite and persistence support.
+     * Initialize the ONNX activity model and persistence support.
      * Call this once during app startup.
-     * 
+     *
      * @param context Application context
      */
     public static void initialize(Context context) {
@@ -46,14 +46,14 @@ public class SimplifiedActivityModel {
 
         modelFileManager = new com.example.wytv2.ml.ModelFileManager(context);
 
-        // Initialize TFLite model
-        tfliteModel = new TFLiteActivityModel();
-        boolean modelLoaded = tfliteModel.initialize(context);
+        // Initialize ONNX activity model
+        onnxModel = new OnnxActivityModel();
+        boolean modelLoaded = onnxModel.initialize(context);
 
         // Log model status
         com.example.wytv2.ml.ModelFileManager.ModelVersionInfo version = modelFileManager.getVersionInfo();
         Log.d(TAG, String.format(
-                "Model initialized: %s (version %d), TFLite: %s",
+                "ONNX model initialized: %s (version %d), status: %s",
                 version.type, version.version,
                 modelLoaded ? "LOADED" : "FALLBACK (rule-based)"));
 
@@ -77,10 +77,10 @@ public class SimplifiedActivityModel {
             modelFileManager.updateVersionInfo();
             Log.d(TAG, "Model saved and version updated");
 
-            // Reload the TFLite model with the new weights
-            if (tfliteModel != null) {
-                tfliteModel.close();
-                tfliteModel.initialize(null); // Will use ModelFileManager to find current model
+            // Reload the ONNX model with the new weights
+            if (onnxModel != null) {
+                onnxModel.close();
+                onnxModel.initialize(null); // Will use ModelFileManager to find current model
             }
         }
         return success;
@@ -110,10 +110,10 @@ public class SimplifiedActivityModel {
     }
 
     /**
-     * Check if TFLite model is loaded (vs rule-based fallback).
+     * Check if the ONNX model is loaded (vs rule-based fallback).
      */
-    public static boolean isTFLiteLoaded() {
-        return tfliteModel != null && tfliteModel.isModelLoaded();
+    public static boolean isOnnxModelLoaded() {
+        return onnxModel != null && onnxModel.isModelLoaded();
     }
 
     /**
@@ -123,8 +123,8 @@ public class SimplifiedActivityModel {
      * @return Predicted activity name
      */
     public static String predict(float[][] features) {
-        if (tfliteModel != null) {
-            return tfliteModel.predict(features);
+        if (onnxModel != null) {
+            return onnxModel.predict(features);
         }
         // Safety net — should not reach here after initialization
         return "Unknown";
@@ -134,8 +134,8 @@ public class SimplifiedActivityModel {
      * Get prediction with confidence scores.
      */
     public static PredictionResult predictWithConfidence(float[][] features) {
-        if (tfliteModel != null) {
-            TFLiteActivityModel.PredictionResult result = tfliteModel.predictWithConfidence(features);
+        if (onnxModel != null) {
+            OnnxActivityModel.PredictionResult result = onnxModel.predictWithConfidence(features);
             return new PredictionResult(result.activity, result.activityIndex,
                     result.confidence, result.probabilities);
         }
@@ -146,9 +146,9 @@ public class SimplifiedActivityModel {
      * Release model resources. Call on app shutdown.
      */
     public static void close() {
-        if (tfliteModel != null) {
-            tfliteModel.close();
-            tfliteModel = null;
+        if (onnxModel != null) {
+            onnxModel.close();
+            onnxModel = null;
         }
         isInitialized = false;
     }
